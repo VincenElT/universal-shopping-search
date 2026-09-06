@@ -1,14 +1,19 @@
 {
   "name": "universal-shopping-search",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:setup": "prisma db push && npm run db:seed"
   },
   "dependencies": {
+    "@prisma/client": "6.19.0",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest"
@@ -19,6 +24,8 @@
     "@types/react-dom": "latest",
     "eslint": "latest",
     "eslint-config-next": "latest",
+    "prisma": "6.19.0",
+    "tsx": "latest",
     "typescript": "latest"
   }
 }
