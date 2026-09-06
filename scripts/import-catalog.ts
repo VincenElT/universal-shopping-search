@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { PrismaClient } from "@prisma/client";
 import { normalizeProduct } from "../src/lib/product-normalizer";
+import { findBestProductMatch } from "../src/lib/product-matcher";
 
 const prisma = new PrismaClient();
 
@@ -63,12 +64,6 @@ function parseCsv(text: string): ImportRow[] {
 
 async function findCanonicalProduct(row: ImportRow) {
   const normalized = normalizeProduct(row);
-
-  if (normalized.modelNumber) {
-    const byModel = await prisma.product.findFirst({ where: { modelNumber: normalized.modelNumber } });
-    if (byModel) return byModel;
-  }
-
   const candidates = await prisma.product.findMany({
     where: {
       category: normalized.category,
@@ -76,11 +71,7 @@ async function findCanonicalProduct(row: ImportRow) {
     },
   });
 
-  const targetName = normalized.name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  return candidates.find((candidate) => {
-    const candidateName = candidate.name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    return candidateName === targetName;
-  }) ?? null;
+  return findBestProductMatch(normalized, candidates);
 }
 
 async function main() {
@@ -90,6 +81,7 @@ async function main() {
   let createdProducts = 0;
   let updatedProducts = 0;
   let upsertedListings = 0;
+  let ambiguousMatches = 0;
 
   for (const row of rows) {
     const normalized = normalizeProduct(row);
@@ -99,8 +91,12 @@ async function main() {
       create: { name: row.marketplace || row.marketplaceSlug, slug: row.marketplaceSlug },
     });
 
-    let product = await findCanonicalProduct(row);
-    if (product) {
+    const decision = await findCanonicalProduct(row);
+    let product = decision.product;
+
+    if (decision.status === "ambiguous") ambiguousMatches += 1;
+
+    if (product && decision.status === "match") {
       product = await prisma.product.update({
         where: { id: product.id },
         data: {
@@ -111,6 +107,7 @@ async function main() {
         },
       });
       updatedProducts += 1;
+      console.log(`MATCH ${decision.score}: "${row.name}" -> "${product.name}" (${decision.reasons.join(", ")})`);
     } else {
       product = await prisma.product.create({
         data: {
@@ -121,6 +118,7 @@ async function main() {
         },
       });
       createdProducts += 1;
+      console.log(`${decision.status === "ambiguous" ? "AMBIGUOUS" : "NEW"} ${decision.score}: "${row.name}" -> new product`);
     }
 
     await prisma.marketplaceListing.upsert({
@@ -151,6 +149,7 @@ async function main() {
   console.log(`Imported ${rows.length} rows.`);
   console.log(`Created products: ${createdProducts}`);
   console.log(`Updated/matched products: ${updatedProducts}`);
+  console.log(`Ambiguous matches: ${ambiguousMatches}`);
   console.log(`Upserted listings: ${upsertedListings}`);
 }
 
