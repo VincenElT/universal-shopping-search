@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 type Listing = {
@@ -40,16 +40,19 @@ function iconFor(category: string) {
 }
 
 export default function ProductPage() {
+  const [id, setId] = useState("");
   const [product, setProduct] = useState<Product | null>(null);
   const [error, setError] = useState("");
 
-  const id = useMemo(() => new URLSearchParams(window.location.search).get("id") ?? "", []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setId(params.get("id")?.trim() ?? "");
+  }, []);
 
   useEffect(() => {
-    if (!id) {
-      setError("No product selected.");
-      return;
-    }
+    if (!id) return;
+
+    setError("");
     fetch(`/api/product?id=${encodeURIComponent(id)}`)
       .then(async (response) => {
         if (!response.ok) throw new Error("Product not found");
@@ -60,6 +63,7 @@ export default function ProductPage() {
   }, [id]);
 
   if (error) return <main className="detail-page"><Link className="back" href="/">← Back to search</Link><div className="empty detail-empty">{error}</div></main>;
+  if (!id) return <main className="detail-page"><Link className="back" href="/">← Back to search</Link><div className="empty detail-empty">Loading product...</div></main>;
   if (!product) return <main className="detail-page"><Link className="back" href="/">← Back to search</Link><div className="empty detail-empty">Loading product...</div></main>;
 
   return (
