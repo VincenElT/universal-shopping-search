@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type Listing = {
   id: string;
@@ -22,16 +23,19 @@ type Product = {
   listings: Listing[];
 };
 
-type SearchResponse = {
-  total: number;
-  pages: number;
-  results: Product[];
-};
+type SearchResponse = { total: number; pages: number; results: Product[] };
 
 const money = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
-const categories = ["", "Mouse", "Keyboard", "Storage", "RAM"];
-const brands = ["", "Logitech", "Samsung", "Kingston"];
-const marketplaces = ["", "shopee", "tokopedia", "lazada"];
+const categories = ["Mouse", "Keyboard", "Storage", "RAM"];
+const brands = ["Logitech", "Samsung", "Kingston"];
+const marketplaces = ["shopee", "tokopedia", "lazada"];
+
+function iconFor(category: string) {
+  if (category === "Mouse") return "🖱️";
+  if (category === "Keyboard") return "⌨️";
+  if (category === "Storage") return "💾";
+  return "🧠";
+}
 
 export default function Home() {
   const [query, setQuery] = useState("");
@@ -54,7 +58,6 @@ export default function Home() {
         if (brand) search.set("brand", brand);
         if (category) search.set("category", category);
         if (marketplace) search.set("marketplace", marketplace);
-
         const response = await fetch(`/api/products?${search.toString()}`, { signal: controller.signal });
         if (!response.ok) throw new Error("Search request failed");
         const data: SearchResponse = await response.json();
@@ -67,16 +70,12 @@ export default function Home() {
         setLoading(false);
       }
     }, 200);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [query, brand, category, marketplace, sort]);
 
   return (
     <main className="page">
-      <header className="header"><nav className="nav"><div className="logo">compare.</div><span className="badge">V1.2 · Search</span></nav></header>
+      <header className="header"><nav className="nav"><Link className="logo" href="/">compare.</Link><span className="badge">V1.3 · Product Search</span></nav></header>
       <section className="hero">
         <div className="eyebrow">Universal Shopping Search</div>
         <h1>Search once.<br />Compare everywhere.</h1>
@@ -87,39 +86,29 @@ export default function Home() {
         </form>
       </section>
       <section className="content">
-        <div className="section-title">
-          <h2>{query ? `Results for “${query}”` : "Popular products"}</h2>
-          <span className="demo">{total} products</span>
-        </div>
+        <div className="section-title"><h2>{query ? `Results for “${query}”` : "Popular products"}</h2><span className="demo">{total} products</span></div>
         <div className="filters">
-          <select value={brand} onChange={e => setBrand(e.target.value)} aria-label="Filter by brand">
-            <option value="">All brands</option>
-            {brands.slice(1).map(item => <option key={item} value={item}>{item}</option>)}
-          </select>
-          <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Filter by category">
-            <option value="">All categories</option>
-            {categories.slice(1).map(item => <option key={item} value={item}>{item}</option>)}
-          </select>
-          <select value={marketplace} onChange={e => setMarketplace(e.target.value)} aria-label="Filter by marketplace">
-            <option value="">All marketplaces</option>
-            {marketplaces.slice(1).map(item => <option key={item} value={item}>{item[0].toUpperCase() + item.slice(1)}</option>)}
-          </select>
-          <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort results">
-            <option value="relevance">Most relevant</option>
-            <option value="price">Lowest price</option>
-          </select>
+          <select value={brand} onChange={e => setBrand(e.target.value)} aria-label="Filter by brand"><option value="">All brands</option>{brands.map(item => <option key={item} value={item}>{item}</option>)}</select>
+          <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Filter by category"><option value="">All categories</option>{categories.map(item => <option key={item} value={item}>{item}</option>)}</select>
+          <select value={marketplace} onChange={e => setMarketplace(e.target.value)} aria-label="Filter by marketplace"><option value="">All marketplaces</option>{marketplaces.map(item => <option key={item} value={item}>{item[0].toUpperCase() + item.slice(1)}</option>)}</select>
+          <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort results"><option value="relevance">Most relevant</option><option value="price">Lowest price</option></select>
         </div>
         {loading && <div className="empty">Searching...</div>}
         {error && <div className="empty">{error}</div>}
         {!loading && !error && <div className="grid">
           {products.map(product => {
             const sorted = [...product.listings].sort((a, b) => a.price - b.price);
+            const best = sorted[0];
             return <article className="card" key={product.id}>
-              <div className="product-head"><div className="thumb">{product.category === "Mouse" ? "🖱️" : product.category === "Keyboard" ? "⌨️" : product.category === "Storage" ? "💾" : "🧠"}</div><div><h3 className="product-name">{product.name}</h3><div className="meta">{product.brand} · {product.category}{product.modelNumber ? ` · ${product.modelNumber}` : ""}</div></div></div>
+              <Link className="product-link" href={`/product?id=${encodeURIComponent(product.id)}`}>
+                <div className="product-head"><div className="thumb">{iconFor(product.category)}</div><div><h3 className="product-name">{product.name}</h3><div className="meta">{product.brand} · {product.category}{product.modelNumber ? ` · ${product.modelNumber}` : ""}</div></div></div>
+              </Link>
+              <div className="price-summary"><div><span className="meta">Best price</span><div className="price">{best ? money.format(best.price) : "—"}</div></div><span className="listing-count">{sorted.length} stores</span></div>
               <div className="listings">{sorted.map((listing, i) => <div className="listing" key={listing.id}>
                 <div><div className="market">{listing.marketplace}{i === 0 ? " · Best price" : ""}</div><div className="meta">{listing.seller ?? "Marketplace seller"}</div><div className="price">{money.format(listing.price)}</div></div>
                 <a className="buy" href={listing.url}>View store</a>
               </div>)}</div>
+              <Link className="compare-link" href={`/product?id=${encodeURIComponent(product.id)}`}>Compare all prices →</Link>
             </article>;
           })}
           {!products.length && <div className="empty">No products matched. Try “Logitech”, “SSD”, “RAM”, or “keyboard”.</div>}
