@@ -11,8 +11,17 @@ export async function GET(request: NextRequest) {
     const category = params.get("category")?.trim() ?? "";
     const marketplace = params.get("marketplace")?.trim() ?? "";
     const sort = params.get("sort") === "price" ? "price" : "relevance";
-    const minPrice = Number(params.get("minPrice"));
-    const maxPrice = Number(params.get("maxPrice"));
+
+    // Only treat price filters as active when the parameter was actually supplied.
+    // Number(null) becomes 0 in JavaScript, which previously caused every request
+    // without price filters to be constrained to price <= 0.
+    const minPriceParam = params.get("minPrice");
+    const maxPriceParam = params.get("maxPrice");
+    const minPrice = minPriceParam !== null && minPriceParam !== "" ? Number(minPriceParam) : null;
+    const maxPrice = maxPriceParam !== null && maxPriceParam !== "" ? Number(maxPriceParam) : null;
+    const hasMinPrice = minPrice !== null && Number.isFinite(minPrice);
+    const hasMaxPrice = maxPrice !== null && Number.isFinite(maxPrice);
+
     const page = Math.max(1, Number.parseInt(params.get("page") ?? "1", 10) || 1);
     const limit = Math.min(MAX_LIMIT, Math.max(1, Number.parseInt(params.get("limit") ?? "12", 10) || 12));
 
@@ -20,13 +29,13 @@ export async function GET(request: NextRequest) {
       where: {
         ...(brand ? { brand: { equals: brand } } : {}),
         ...(category ? { category: { equals: category } } : {}),
-        ...(marketplace || Number.isFinite(minPrice) || Number.isFinite(maxPrice)
+        ...(marketplace || hasMinPrice || hasMaxPrice
           ? {
               listings: {
                 some: {
                   ...(marketplace ? { marketplace: { slug: marketplace } } : {}),
-                  ...(Number.isFinite(minPrice) ? { price: { gte: minPrice } } : {}),
-                  ...(Number.isFinite(maxPrice) ? { price: { lte: maxPrice } } : {}),
+                  ...(hasMinPrice ? { price: { gte: minPrice! } } : {}),
+                  ...(hasMaxPrice ? { price: { lte: maxPrice! } } : {}),
                 },
               },
             }
@@ -36,8 +45,13 @@ export async function GET(request: NextRequest) {
         listings: {
           where: {
             ...(marketplace ? { marketplace: { slug: marketplace } } : {}),
-            ...(Number.isFinite(minPrice) || Number.isFinite(maxPrice)
-              ? { price: { ...(Number.isFinite(minPrice) ? { gte: minPrice } : {}), ...(Number.isFinite(maxPrice) ? { lte: maxPrice } : {}) } }
+            ...(hasMinPrice || hasMaxPrice
+              ? {
+                  price: {
+                    ...(hasMinPrice ? { gte: minPrice! } : {}),
+                    ...(hasMaxPrice ? { lte: maxPrice! } : {}),
+                  },
+                }
               : {}),
           },
           include: { marketplace: true },
@@ -104,7 +118,13 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       query,
-      filters: { brand, category, marketplace, minPrice: Number.isFinite(minPrice) ? minPrice : null, maxPrice: Number.isFinite(maxPrice) ? maxPrice : null },
+      filters: {
+        brand,
+        category,
+        marketplace,
+        minPrice: hasMinPrice ? minPrice : null,
+        maxPrice: hasMaxPrice ? maxPrice : null,
+      },
       sort,
       page,
       limit,
