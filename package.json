@@ -1,6 +1,6 @@
 {
   "name": "universal-shopping-search",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,7 +10,8 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "db:setup": "prisma db push && npm run db:seed"
+    "db:setup": "prisma db push && npm run db:seed",
+    "import:catalog": "tsx scripts/import-catalog.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.0",
