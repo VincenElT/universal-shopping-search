@@ -22,11 +22,25 @@ type Product = {
   listings: Listing[];
 };
 
+type SearchResponse = {
+  total: number;
+  pages: number;
+  results: Product[];
+};
+
 const money = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
+const categories = ["", "Mouse", "Keyboard", "Storage", "RAM"];
+const brands = ["", "Logitech", "Samsung", "Kingston"];
+const marketplaces = ["", "shopee", "tokopedia", "lazada"];
 
 export default function Home() {
   const [query, setQuery] = useState("");
+  const [brand, setBrand] = useState("");
+  const [category, setCategory] = useState("");
+  const [marketplace, setMarketplace] = useState("");
+  const [sort, setSort] = useState("relevance");
   const [products, setProducts] = useState<Product[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -36,13 +50,19 @@ export default function Home() {
       try {
         setLoading(true);
         setError("");
-        const response = await fetch(`/api/products?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+        const search = new URLSearchParams({ q: query, sort, limit: "20" });
+        if (brand) search.set("brand", brand);
+        if (category) search.set("category", category);
+        if (marketplace) search.set("marketplace", marketplace);
+
+        const response = await fetch(`/api/products?${search.toString()}`, { signal: controller.signal });
         if (!response.ok) throw new Error("Search request failed");
-        const data = await response.json();
+        const data: SearchResponse = await response.json();
         setProducts(data.results);
+        setTotal(data.total);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        setError("Could not load products. Make sure the database is running and seeded.");
+        setError("Could not load products. Check the database and API.");
       } finally {
         setLoading(false);
       }
@@ -52,11 +72,11 @@ export default function Home() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query]);
+  }, [query, brand, category, marketplace, sort]);
 
   return (
     <main className="page">
-      <header className="header"><nav className="nav"><div className="logo">compare.</div><span className="badge">V1.1 · Database</span></nav></header>
+      <header className="header"><nav className="nav"><div className="logo">compare.</div><span className="badge">V1.2 · Search</span></nav></header>
       <section className="hero">
         <div className="eyebrow">Universal Shopping Search</div>
         <h1>Search once.<br />Compare everywhere.</h1>
@@ -67,7 +87,28 @@ export default function Home() {
         </form>
       </section>
       <section className="content">
-        <div className="section-title"><h2>{query ? `Results for “${query}”` : "Popular products"}</h2><span className="demo">Database-backed demo</span></div>
+        <div className="section-title">
+          <h2>{query ? `Results for “${query}”` : "Popular products"}</h2>
+          <span className="demo">{total} products</span>
+        </div>
+        <div className="filters">
+          <select value={brand} onChange={e => setBrand(e.target.value)} aria-label="Filter by brand">
+            <option value="">All brands</option>
+            {brands.slice(1).map(item => <option key={item} value={item}>{item}</option>)}
+          </select>
+          <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Filter by category">
+            <option value="">All categories</option>
+            {categories.slice(1).map(item => <option key={item} value={item}>{item}</option>)}
+          </select>
+          <select value={marketplace} onChange={e => setMarketplace(e.target.value)} aria-label="Filter by marketplace">
+            <option value="">All marketplaces</option>
+            {marketplaces.slice(1).map(item => <option key={item} value={item}>{item[0].toUpperCase() + item.slice(1)}</option>)}
+          </select>
+          <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort results">
+            <option value="relevance">Most relevant</option>
+            <option value="price">Lowest price</option>
+          </select>
+        </div>
         {loading && <div className="empty">Searching...</div>}
         {error && <div className="empty">{error}</div>}
         {!loading && !error && <div className="grid">
