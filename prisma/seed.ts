@@ -93,8 +93,14 @@ async function main() {
     for (const [marketplaceName, marketplaceSlug, price, seller] of item.listings) {
       const marketplace = await prisma.marketplace.findUniqueOrThrow({ where: { slug: marketplaceSlug } });
       await prisma.marketplaceListing.upsert({
-        where: { productId_marketplaceId: { productId: product.id, marketplaceId: marketplace.id } },
-        update: { title: item.name, price, seller, productUrl: "#", affiliateUrl: null, inStock: true },
+        where: {
+          productId_marketplaceId_productUrl: {
+            productId: product.id,
+            marketplaceId: marketplace.id,
+            productUrl: "#",
+          },
+        },
+        update: { title: item.name, price, seller, affiliateUrl: null, inStock: true },
         create: {
           productId: product.id,
           marketplaceId: marketplace.id,
