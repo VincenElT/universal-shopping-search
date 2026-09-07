@@ -81,6 +81,8 @@ async function main() {
   let createdProducts = 0;
   let updatedProducts = 0;
   let upsertedListings = 0;
+  let recordedSnapshots = 0;
+  let skippedSnapshots = 0;
   let ambiguousMatches = 0;
 
   for (const row of rows) {
@@ -121,7 +123,12 @@ async function main() {
       console.log(`${decision.status === "ambiguous" ? "AMBIGUOUS" : "NEW"} ${decision.score}: "${row.name}" -> new product`);
     }
 
-    await prisma.marketplaceListing.upsert({
+    const existingListing = await prisma.marketplaceListing.findUnique({
+      where: { productId_marketplaceId: { productId: product.id, marketplaceId: marketplace.id } },
+      select: { id: true, price: true, inStock: true },
+    });
+
+    const listing = await prisma.marketplaceListing.upsert({
       where: { productId_marketplaceId: { productId: product.id, marketplaceId: marketplace.id } },
       update: {
         title: row.name,
@@ -144,6 +151,22 @@ async function main() {
       },
     });
     upsertedListings += 1;
+
+    // A snapshot is useful only when something changed. This keeps repeated
+    // imports from filling the history table with identical observations.
+    const changed = !existingListing || existingListing.price !== row.price || existingListing.inStock !== row.inStock;
+    if (changed) {
+      await prisma.priceHistory.create({
+        data: {
+          listingId: listing.id,
+          price: row.price,
+          inStock: row.inStock,
+        },
+      });
+      recordedSnapshots += 1;
+    } else {
+      skippedSnapshots += 1;
+    }
   }
 
   console.log(`Imported ${rows.length} rows.`);
@@ -151,6 +174,8 @@ async function main() {
   console.log(`Updated/matched products: ${updatedProducts}`);
   console.log(`Ambiguous matches: ${ambiguousMatches}`);
   console.log(`Upserted listings: ${upsertedListings}`);
+  console.log(`Recorded price snapshots: ${recordedSnapshots}`);
+  console.log(`Skipped unchanged snapshots: ${skippedSnapshots}`);
 }
 
 main().catch((error) => { console.error(error); process.exit(1); }).finally(() => prisma.$disconnect());
