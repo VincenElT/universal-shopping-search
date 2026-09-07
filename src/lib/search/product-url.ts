@@ -18,12 +18,25 @@ const BLOCKED_PATH_SEGMENTS = new Set([
   "collections",
 ]);
 
+const BLOCKED_HOSTS = new Set([
+  "google.com",
+  "www.google.com",
+  "googleapis.com",
+  "www.googleapis.com",
+  "googleusercontent.com",
+]);
+
 export function marketplaceFromUrl(url: string): string {
-  const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-  if (host === "shopee.co.id" || host.endsWith(".shopee.co.id")) return "shopee";
-  if (host === "tokopedia.com" || host.endsWith(".tokopedia.com")) return "tokopedia";
-  if (host === "lazada.co.id" || host.endsWith(".lazada.co.id")) return "lazada";
-  return host || "other";
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    if (host === "shopee.co.id" || host.endsWith(".shopee.co.id")) return "shopee";
+    if (host === "tokopedia.com" || host.endsWith(".tokopedia.com")) return "tokopedia";
+    if (host === "lazada.co.id" || host.endsWith(".lazada.co.id")) return "lazada";
+    if (host === "blibli.com" || host.endsWith(".blibli.com")) return "blibli.com";
+    return host || "other";
+  } catch {
+    return "other";
+  }
 }
 
 export function normalizeProductUrl(url: string) {
@@ -40,10 +53,16 @@ function hasBlockedPath(path: string) {
     .some((segment) => BLOCKED_PATH_SEGMENTS.has(segment.toLowerCase()));
 }
 
+function isBlockedHost(hostname: string) {
+  const host = hostname.toLowerCase().replace(/^www\./, "");
+  return [...BLOCKED_HOSTS].some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
+}
+
 /**
- * Returns true only when the URL has enough marketplace-specific structure to
- * be treated as a direct product detail page. Search/category/store pages are
- * deliberately rejected even if a price was extracted from their snippet.
+ * Reject navigation/search pages while accepting the real product URL shapes
+ * returned by marketplace search engines. This is intentionally less strict
+ * than the previous validator: URL shape is evidence, not proof that a page
+ * contains a product.
  */
 export function isProductUrl(listing: { marketplace: string; url: string; price?: number | null }) {
   let parsed: URL;
@@ -54,36 +73,39 @@ export function isProductUrl(listing: { marketplace: string; url: string; price?
   }
 
   if (parsed.protocol !== "https:") return false;
+  if (isBlockedHost(parsed.hostname)) return false;
 
   const path = parsed.pathname.toLowerCase().replace(/\/+$/, "");
   const segments = path.split("/").filter(Boolean);
   if (!segments.length || hasBlockedPath(path)) return false;
 
   if (listing.marketplace === "shopee") {
-    // Shopee detail URLs contain both shop/item numeric IDs.
-    return /-i\.\d+\.\d+$/.test(path);
+    // Current Shopee detail URLs normally contain the shop and item IDs.
+    // Accept both the canonical -i.shopId.itemId form and valid-looking
+    // product paths with an ID, since Google can surface alternate variants.
+    return /-i\.\d+\.\d+$/.test(path) || /\/[^/]+-i\.\d+\.\d+(?:\/|$)/.test(path);
   }
 
   if (listing.marketplace === "tokopedia") {
-    // Tokopedia product pages are /<shop>/<product-slug>. Do not accept /search,
-    // /find, store pages, or arbitrary two-segment URLs without a product price.
-    if (segments.length !== 2) return false;
-    return Boolean(listing.price != null && listing.price >= 1000);
+    // Tokopedia product URLs are commonly /<shop>/<product-slug>, while some
+    // links have extra routing segments. Keep only paths that look product-like
+    // and have a price when the URL cannot otherwise be identified as a detail page.
+    if (segments.length === 2) return true;
+    return segments.length >= 2 && Boolean(listing.price != null && listing.price >= 1000);
   }
 
   if (listing.marketplace === "lazada") {
-    // Lazada product detail URLs use /products/<slug>-i<numeric-id>.html.
-    return /^\/products\/.+-i\d+\.html$/.test(path);
+    return /^\/products\/.+-i\d+\.html$/.test(path) || /-i\d+\.html$/.test(path);
   }
 
-  // Known Blibli-style product URLs use /p/<product-slug>/<product-id>.
   if (listing.marketplace === "blibli.com" || listing.marketplace === "blibli") {
-    return /^\/p\/[^/]+\/[^/]+$/.test(path) || /^\/[^/]+\/p-[^/]+$/.test(path);
+    // Blibli commonly uses /p/<product-slug>, and Google may return a canonical
+    // product URL without a second ID segment.
+    return /^\/p\/[^/]+$/.test(path) || /^\/p\/[^/]+\/[^/]+$/.test(path) || /^\/[^/]+\/p-[^/]+$/.test(path);
   }
 
-  // Other retailers are accepted only when they expose a non-trivial product
-  // path and a price. This is intentionally conservative; search/category
-  // pages are blocked above and can never become stored product URLs.
+  // Other retailers: require a meaningful detail path and a price. This avoids
+  // turning a generic retailer homepage into a store destination.
   return segments.length >= 2 && listing.price != null && listing.price >= 1000;
 }
 
