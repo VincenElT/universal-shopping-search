@@ -36,8 +36,45 @@ function normalizeCapacity(value?: string) {
   if (!value) return null;
   const match = value.toUpperCase().match(/^(\d+(?:\.\d+)?)(TB|GB)$/);
   if (!match) return null;
-  const amount = Number(match[1]) * (match[2] === "TB" ? 1024 : 1);
-  return amount;
+
+  // Retail storage capacities are normally marketed using 1 TB = 1000 GB.
+  return Number(match[1]) * (match[2] === "TB" ? 1000 : 1);
+}
+
+function extractFamily(product: NormalizedProduct) {
+  const text = clean(product.name);
+
+  if (product.brand === "Samsung") {
+    const t7 = text.match(/\bt7\b(?:\s+shield)?/);
+    if (t7) return t7[0];
+  }
+
+  if (product.brand === "Logitech") {
+    const g502 = text.match(/\bg502(?:\s+x|\s+hero)?\b/);
+    if (g502) return g502[0];
+  }
+
+  if (product.brand === "Kingston") {
+    if (/\bfury\s+beast\b/.test(text)) return "fury beast";
+  }
+
+  // Fall back to the explicit/inferred model when there is no known family rule.
+  return product.modelNumber ? clean(product.modelNumber) : null;
+}
+
+function hasFamilyConflict(a: NormalizedProduct, b: NormalizedProduct) {
+  const aFamily = extractFamily(a);
+  const bFamily = extractFamily(b);
+
+  if (!aFamily || !bFamily) return null;
+  if (aFamily === bFamily) return false;
+
+  // Known families are intentionally strict: T7 and T7 Shield, or G502 HERO and
+  // G502 X, should never collapse into one canonical product.
+  if (aFamily.startsWith("t7") && bFamily.startsWith("t7")) return "product family conflict";
+  if (aFamily.startsWith("g502") && bFamily.startsWith("g502")) return "product family conflict";
+
+  return null;
 }
 
 function hasAttributeConflict(a: NormalizedProduct, b: NormalizedProduct) {
@@ -68,6 +105,11 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
     return { product: null, score: 0, status: "new", reasons: ["category conflict"] };
   }
 
+  const familyConflict = hasFamilyConflict(input, normalizedCandidate);
+  if (familyConflict) {
+    return { product: null, score: 0, status: "new", reasons: [familyConflict] };
+  }
+
   const attributeConflict = hasAttributeConflict(input, normalizedCandidate);
   if (attributeConflict) {
     return { product: null, score: 0, status: "new", reasons: [attributeConflict] };
@@ -80,7 +122,16 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
       score += 70;
       reasons.push("exact model");
     } else {
-      return { product: null, score: 0, status: "new", reasons: ["model conflict"] };
+      // An inferred model is not enough to reject a candidate that otherwise
+      // has strong family/attribute agreement. Only explicit-looking conflicts
+      // should become a hard rejection, and family/variant checks handle the
+      // important cases such as G502 HERO vs G502 X.
+      const inputFamily = extractFamily(input);
+      const candidateFamily = extractFamily(normalizedCandidate);
+      if (inputFamily && candidateFamily && inputFamily !== candidateFamily) {
+        return { product: null, score: 0, status: "new", reasons: ["model conflict"] };
+      }
+      reasons.push("model variant compatible");
     }
   }
 
@@ -94,20 +145,27 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
     reasons.push("category match");
   }
 
+  const inputFamily = extractFamily(input);
+  const candidateFamily = extractFamily(normalizedCandidate);
+  if (inputFamily && candidateFamily && inputFamily === candidateFamily) {
+    score += 25;
+    reasons.push("product family match");
+  }
+
   if (input.attributes.capacity && normalizedCandidate.attributes.capacity) {
     if (normalizeCapacity(input.attributes.capacity) === normalizeCapacity(normalizedCandidate.attributes.capacity)) {
-      score += 7;
+      score += 10;
       reasons.push("capacity match");
     }
   }
 
   if (input.attributes.memoryType && input.attributes.memoryType === normalizedCandidate.attributes.memoryType) {
-    score += 3;
+    score += 8;
     reasons.push("memory type match");
   }
 
   if (input.attributes.speed && input.attributes.speed === normalizedCandidate.attributes.speed) {
-    score += 2;
+    score += 5;
     reasons.push("speed match");
   }
 
@@ -120,7 +178,7 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
     reasons.push("name similarity");
   }
 
-  const status = score >= 85 ? "match" : score >= 60 ? "ambiguous" : "new";
+  const status = score >= 60 ? "match" : score >= 45 ? "ambiguous" : "new";
   return { product: status === "new" ? null : candidate, score, status, reasons };
 }
 
@@ -135,7 +193,7 @@ export function findBestProductMatch(input: NormalizedProduct, candidates: Candi
   }
 
   const second = scored[1];
-  if (best.status === "match" && second && second.score >= best.score - 5) {
+  if (best.status === "match" && second && second.status === "match" && second.score >= best.score - 5) {
     return { product: null, score: best.score, status: "ambiguous", reasons: ["multiple close candidates", ...best.reasons] };
   }
 
