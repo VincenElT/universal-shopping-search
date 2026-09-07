@@ -124,12 +124,12 @@ async function main() {
     }
 
     const existingListing = await prisma.marketplaceListing.findUnique({
-      where: { productId_marketplaceId: { productId: product.id, marketplaceId: marketplace.id } },
+      where: { productId_marketplaceId_productUrl: { productId: product.id, marketplaceId: marketplace.id, productUrl: row.productUrl } },
       select: { id: true, price: true, inStock: true },
     });
 
     const listing = await prisma.marketplaceListing.upsert({
-      where: { productId_marketplaceId: { productId: product.id, marketplaceId: marketplace.id } },
+      where: { productId_marketplaceId_productUrl: { productId: product.id, marketplaceId: marketplace.id, productUrl: row.productUrl } },
       update: {
         title: row.name,
         price: row.price,
@@ -152,15 +152,26 @@ async function main() {
     });
     upsertedListings += 1;
 
-    // A snapshot is useful only when something changed. This keeps repeated
-    // imports from filling the history table with identical observations.
+    await prisma.listingObservation.create({
+      data: {
+        listingId: listing.id,
+        source: "catalog_import",
+        sourceUrl: row.productUrl,
+        rawTitle: row.name,
+        rawPrice: String(row.price),
+        rawSeller: row.seller,
+        extractedData: JSON.stringify({ source: "catalog_import", marketplace: row.marketplaceSlug }),
+        confidence: 80,
+      },
+    });
+
     const changed = !existingListing || existingListing.price !== row.price || existingListing.inStock !== row.inStock;
     if (changed) {
       await prisma.priceHistory.create({
         data: {
           listingId: listing.id,
           price: row.price,
-          inStock: row.inStock,
+          inStock: row.inStock ?? true,
         },
       });
       recordedSnapshots += 1;
