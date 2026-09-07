@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isUsableDestinationUrl } from "@/lib/search/product-url";
 
+/** Always return the canonical product URL discovered from the marketplace.
+ * Affiliate/tracking URLs are deliberately ignored because they can be stale
+ * or redirect to a search/category page instead of the exact listing.
+ */
 function destinationUrl(listing: { affiliateUrl: string | null; productUrl: string; marketplace: { slug: string }; price: number }) {
-  if (listing.affiliateUrl && isUsableDestinationUrl(listing.affiliateUrl, listing.marketplace.slug, listing.price)) return listing.affiliateUrl;
-  if (isUsableDestinationUrl(listing.productUrl, listing.marketplace.slug, listing.price)) return listing.productUrl;
-  return null;
+  return isUsableDestinationUrl(listing.productUrl, listing.marketplace.slug, listing.price) ? listing.productUrl : null;
 }
 
 export async function GET(request: NextRequest) {
