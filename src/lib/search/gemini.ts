@@ -154,10 +154,26 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
   const chunks = candidate?.groundingMetadata?.groundingChunks ?? [];
+
+  const parsedListings = extractJson(text);
+  console.log("[gemini-debug] response", {
+    candidateCount: data.candidates?.length ?? 0,
+    textLength: text.length,
+    textPreview: text.slice(0, 4000),
+    parsedCount: parsedListings.length,
+    groundingChunkCount: chunks.length,
+    groundingChunks: chunks.map((chunk, index) => ({
+      index,
+      title: chunk.web?.title ?? null,
+      uri: chunk.web?.uri ?? null,
+      marketplace: chunk.web?.uri ? marketplaceFromUrl(chunk.web.uri) : "other",
+    })),
+  });
+
   const textUrl = marketplaceUrlFromText(text);
 
   const seen = new Set<string>();
-  return extractJson(text).flatMap((item): DiscoveredListing[] => {
+  return parsedListings.flatMap((item): DiscoveredListing[] => {
     const rawUrl = bestGroundingUrl(item, chunks) ?? textUrl;
     if (!rawUrl || !item.title) return [];
 
