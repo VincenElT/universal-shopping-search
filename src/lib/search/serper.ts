@@ -89,8 +89,12 @@ export async function discoverListings(keyword: string, options?: { limit?: numb
   try {
     const geminiListings = await discoverListingsWithGemini(keyword, options);
     if (geminiListings.length > 0) return geminiListings;
-    console.warn("[search] Gemini returned 0 usable listings; falling back to Serper.");
-    if (provider === "auto" || provider === "gemini") return await discoverWithSerper(keyword, options);
+    if (provider === "auto") {
+      console.warn("[search] Gemini returned 0 usable listings; falling back to Serper.");
+      return await discoverWithSerper(keyword, options);
+    }
+    console.warn("[search] Gemini returned 0 usable listings; explicit Gemini provider will not use Serper.");
+    return [];
   } catch (error) {
     if (provider === "gemini" && !shouldFallbackToSerper(error)) throw error;
     if (provider === "gemini" || provider === "auto") {
@@ -99,5 +103,4 @@ export async function discoverListings(keyword: string, options?: { limit?: numb
     }
     throw error;
   }
-  return [];
 }
