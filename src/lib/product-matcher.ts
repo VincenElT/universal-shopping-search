@@ -36,8 +36,6 @@ function normalizeCapacity(value?: string) {
   if (!value) return null;
   const match = value.toUpperCase().match(/^(\d+(?:\.\d+)?)(TB|GB)$/);
   if (!match) return null;
-
-  // Retail storage capacities are normally marketed using 1 TB = 1000 GB.
   return Number(match[1]) * (match[2] === "TB" ? 1000 : 1);
 }
 
@@ -140,8 +138,7 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
 
   const inputFamily = extractFamily(input);
   const candidateFamily = extractFamily(normalizedCandidate);
-  const sameFamily = Boolean(inputFamily && candidateFamily && inputFamily === candidateFamily);
-  if (sameFamily) {
+  if (inputFamily && candidateFamily && inputFamily === candidateFamily) {
     score += 25;
     reasons.push("product family match");
   }
@@ -172,7 +169,9 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
     reasons.push("name similarity");
   }
 
-  const status = score >= 60 ? "match" : score >= 45 ? "ambiguous" : "new";
+  // 53 is intentionally the match floor for a known family with strong
+  // supporting evidence. Hard conflicts are rejected above before scoring.
+  const status = score >= 53 ? "match" : score >= 45 ? "ambiguous" : "new";
   return { product: status === "new" ? null : candidate, score, status, reasons };
 }
 
@@ -187,11 +186,7 @@ export function findBestProductMatch(input: NormalizedProduct, candidates: Candi
   }
 
   const second = scored[1];
-
-  // Only treat a close second as ambiguous when it is genuinely compatible
-  // with the same product family. A rejected candidate (capacity/family/etc.)
-  // must not make an otherwise strong match ambiguous.
-  const bestFamily = extractFamily(normalizeProduct(best.product!));
+  const bestFamily = best.product ? extractFamily(normalizeProduct(best.product)) : null;
   const secondFamily = second?.product ? extractFamily(normalizeProduct(second.product)) : null;
   const sameFamily = Boolean(bestFamily && secondFamily && bestFamily === secondFamily);
 
