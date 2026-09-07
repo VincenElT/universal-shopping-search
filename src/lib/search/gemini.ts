@@ -1,7 +1,6 @@
 import type { DiscoveredListing } from "./serper";
 
 const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
-const GEMINI_TIMEOUT_MS = 10_000;
 
 type GroundingChunk = { web?: { uri?: string; title?: string } };
 type GeminiResponse = {
@@ -115,9 +114,15 @@ function bestGroundingUrl(item: GeminiListing, chunks: GroundingChunk[]) {
 
 async function requestGemini(apiKey: string, keyword: string, limit: number) {
   const prompt = `Search Google for real Indonesian marketplace listings for the exact product: "${keyword}". Look across Shopee Indonesia, Tokopedia, and Lazada Indonesia. Return up to ${limit} listings per marketplace when available. Do not invent listings, prices, sellers, ratings, or URLs. Only include listings supported by grounded search sources. Return ONLY a JSON array, no markdown, with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. url must be the actual marketplace product URL when visible in the grounded source; otherwise null. price must be an integer IDR when visible, otherwise null. sourceIndex should identify the grounded source supporting the listing.`;
-  console.log("[gemini-debug] request", { endpoint: GEMINI_ENDPOINT, keyword, limit, hasApiKey: Boolean(apiKey) });
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+
+  console.log("[gemini-debug] request", {
+    endpoint: GEMINI_ENDPOINT,
+    keyword,
+    limit,
+    hasApiKey: Boolean(apiKey),
+  });
+
+  const startedAt = Date.now();
   try {
     const response = await fetch(GEMINI_ENDPOINT, {
       method: "POST",
@@ -128,21 +133,27 @@ async function requestGemini(apiKey: string, keyword: string, limit: number) {
         generationConfig: { temperature: 0 },
       }),
       cache: "no-store",
-      signal: controller.signal,
+    });
+
+    console.log("[gemini-debug] http", {
+      status: response.status,
+      ok: response.ok,
+      elapsedMs: Date.now() - startedAt,
     });
 
     const data = (await response.json().catch(() => ({}))) as GeminiResponse;
-    console.log("[gemini-debug] http", { status: response.status, ok: response.ok, hasCandidates: Boolean(data.candidates?.length), error: data.error ?? null });
     if (!response.ok) {
       const detail = data.error?.message ? ` ${data.error.message}` : "";
       throw new Error(`Gemini API returned HTTP ${response.status}.${detail}`);
     }
+
     return data;
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error("Gemini request timed out.");
+    console.error("[gemini-debug] request failed", {
+      elapsedMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -156,8 +167,8 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
   const chunks = candidate?.groundingMetadata?.groundingChunks ?? [];
-  const parsedListings = extractJson(text);
 
+  const parsedListings = extractJson(text);
   console.log("[gemini-debug] response", {
     candidateCount: data.candidates?.length ?? 0,
     textLength: text.length,
@@ -173,6 +184,7 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
   });
 
   const textUrl = marketplaceUrlFromText(text);
+
   const seen = new Set<string>();
   return parsedListings.flatMap((item): DiscoveredListing[] => {
     const rawUrl = bestGroundingUrl(item, chunks) ?? textUrl;
