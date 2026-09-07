@@ -39,10 +39,7 @@ function parseSoldCount(text: string) { const match = text.match(/(?:terjual|sol
 function sellerScore(rating: number | null, reviews: number | null, sold: number | null) { if (rating == null && reviews == null && sold == null) return null; const ratingScore = rating == null ? 0 : Math.min(5, Math.max(0, rating)) / 5 * 55; const reviewScore = reviews == null ? 0 : Math.min(1, Math.log10(Math.max(1, reviews)) / 5) * 25; const soldScore = sold == null ? 0 : Math.min(1, Math.log10(Math.max(1, sold)) / 5) * 20; return Math.round(ratingScore + reviewScore + soldScore); }
 
 function isProductUrl(listing: DiscoveredListing) {
-  const parsed = new URL(listing.url);
-  const path = parsed.pathname.toLowerCase().replace(/\/+$/, "");
-  const segments = path.split("/").filter(Boolean);
-  if (!segments.length) return false;
+  const parsed = new URL(listing.url); const path = parsed.pathname.toLowerCase().replace(/\/+$/, ""); const segments = path.split("/").filter(Boolean); if (!segments.length) return false;
   if (/\/(search|find|category|categories|mall|reviews?|help|login)(\/|$)/i.test(path)) return false;
   if (listing.marketplace === "shopee") return /-i\.\d+\.\d+$/.test(path) || (listing.price != null && segments.length >= 1);
   if (listing.marketplace === "tokopedia") return !path.startsWith("/find") && !path.startsWith("/search") && !path.includes("/review") && (segments.length >= 2 || listing.price != null);
@@ -54,11 +51,8 @@ export function cleanAndDeduplicateListings(listings: DiscoveredListing[]) { con
 export function matchDiscoveredListings(listings: DiscoveredListing[], candidates: CandidateProduct[]) { return cleanAndDeduplicateListings(listings).map<MatchedDiscoveredListing>((listing) => { const normalized = normalizeProduct({ name: listing.title }); const match = findBestProductMatch(normalized, candidates); return { ...listing, normalized, match }; }); }
 
 async function discoverWithSerper(keyword: string, options?: { limit?: number }) {
-  const trimmed = keyword.trim();
-  if (!trimmed) throw new Error("Search keyword is required.");
-  const apiKey = requiredEnv("SERPER_API_KEY");
-  const endpoint = process.env.SERPER_API_URL || DEFAULT_ENDPOINT;
-  const limit = Math.min(20, Math.max(1, options?.limit ?? 10));
+  const trimmed = keyword.trim(); if (!trimmed) throw new Error("Search keyword is required.");
+  const apiKey = requiredEnv("SERPER_API_KEY"); const endpoint = process.env.SERPER_API_URL || DEFAULT_ENDPOINT; const limit = Math.min(20, Math.max(1, options?.limit ?? 10));
   const marketplaces = [
     { name: "shopee", query: `site:shopee.co.id ${trimmed}` },
     { name: "tokopedia", query: `site:tokopedia.com ${trimmed}` },
@@ -67,8 +61,7 @@ async function discoverWithSerper(keyword: string, options?: { limit?: number })
   const responses = await Promise.all(marketplaces.map(async ({ name, query }) => {
     const shoppingResponse = await fetch(SHOPPING_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json", "X-API-KEY": apiKey }, body: JSON.stringify({ q: `${trimmed} ${name}`, gl: "id", hl: "id", num: limit }), cache: "no-store" });
     if (!shoppingResponse.ok) throw new Error(`Serper API returned HTTP ${shoppingResponse.status}.`);
-    const shopping = (await shoppingResponse.json()) as SerperResponse;
-    const results: DiscoveredListing[] = [];
+    const shopping = (await shoppingResponse.json()) as SerperResponse; const results: DiscoveredListing[] = [];
     for (const item of shopping.shopping ?? []) {
       if (!item.link || !item.title) continue; const marketplace = marketplaceFromUrl(item.link); if (marketplace !== name) continue;
       const rating = item.rating == null ? null : Number(item.rating); const reviewCount = parseCount(item.ratingCount); const text = `${item.title} ${item.snippet ?? ""}`; const soldCount = parseSoldCount(text);
@@ -88,37 +81,23 @@ async function discoverWithSerper(keyword: string, options?: { limit?: number })
   return cleaned.filter((listing) => listing.sellerTrustScore !== null || listing.price !== null).sort((a, b) => (b.sellerTrustScore ?? -1) - (a.sellerTrustScore ?? -1) || (a.position ?? 999) - (b.position ?? 999));
 }
 
-function configuredProvider(): SearchProvider {
-  const value = process.env.SEARCH_PROVIDER?.trim().toLowerCase();
-  if (value === "serper" || value === "gemini" || value === "auto") return value;
-  return "auto";
-}
-
-function shouldFallbackToSerper(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("Gemini API returned HTTP 429") || message.includes("Gemini API returned HTTP 5") || message.includes("GEMINI_API_KEY is not configured") || message.includes("Gemini request failed");
-}
+function configuredProvider(): SearchProvider { const value = process.env.SEARCH_PROVIDER?.trim().toLowerCase(); if (value === "serper" || value === "gemini" || value === "auto") return value; return "auto"; }
+function shouldFallbackToSerper(error: unknown) { const message = error instanceof Error ? error.message : String(error); return message.includes("Gemini API returned HTTP") || message.includes("GEMINI_API_KEY is not configured") || message.includes("Gemini request failed") || message.includes("Gemini request timed out"); }
 
 export async function discoverListings(keyword: string, options?: { limit?: number }) {
-  const provider = configuredProvider();
-  if (provider === "serper") return discoverWithSerper(keyword, options);
-
+  const provider = configuredProvider(); if (provider === "serper") return discoverWithSerper(keyword, options);
   try {
     const geminiListings = await discoverListingsWithGemini(keyword, options);
-    if (geminiListings.length > 0 || provider === "gemini") return geminiListings;
-    if (provider === "gemini") return geminiListings;
+    if (geminiListings.length > 0) return geminiListings;
+    console.warn("[search] Gemini returned 0 usable listings; falling back to Serper.");
+    if (provider === "auto" || provider === "gemini") return await discoverWithSerper(keyword, options);
   } catch (error) {
     if (provider === "gemini" && !shouldFallbackToSerper(error)) throw error;
     if (provider === "gemini" || provider === "auto") {
-      try {
-        return await discoverWithSerper(keyword, options);
-      } catch (fallbackError) {
-        throw new Error(`${error instanceof Error ? error.message : String(error)} Serper fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
-      }
+      try { return await discoverWithSerper(keyword, options); }
+      catch (fallbackError) { throw new Error(`${error instanceof Error ? error.message : String(error)} Serper fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`); }
     }
     throw error;
   }
-
-  if (provider === "auto") return discoverWithSerper(keyword, options);
   return [];
 }
