@@ -59,6 +59,7 @@ function marketplaceFromUrl(url: string): DiscoveredListing["marketplace"] {
     if (host === "shopee.co.id" || host.endsWith(".shopee.co.id")) return "shopee";
     if (host === "tokopedia.com" || host.endsWith(".tokopedia.com")) return "tokopedia";
     if (host === "lazada.co.id" || host.endsWith(".lazada.co.id")) return "lazada";
+    if (host === "google.com" || host.endsWith(".google.com") || host.endsWith(".googleapis.com") || host.endsWith("googleusercontent.com")) return "other";
     return host;
   } catch {}
   return "other";
@@ -99,25 +100,10 @@ function marketplaceUrlFromText(text: string) {
 }
 
 function bestGroundingUrl(item: GeminiListing, chunks: GroundingChunk[]) {
-  const explicit = item.url || undefined;
-  if (explicit) return explicit;
-
+  if (item.url) return item.url;
   const indexed = item.sourceIndex != null ? chunks[item.sourceIndex]?.web : undefined;
   if (indexed?.uri && marketplaceFromUrl(indexed.uri) !== "other") return indexed.uri;
-
-  const titleTokens = (item.title ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 3);
-  const ranked = chunks
-    .map((chunk, index) => {
-      const uri = chunk.web?.uri;
-      if (!uri || marketplaceFromUrl(uri) === "other") return null;
-      const sourceTitle = (chunk.web?.title ?? "").toLowerCase();
-      const score = titleTokens.reduce((sum, token) => sum + (sourceTitle.includes(token) ? 1 : 0), 0);
-      return { uri, index, score };
-    })
-    .filter((value): value is { uri: string; index: number; score: number } => value !== null)
-    .sort((a, b) => b.score - a.score || a.index - b.index);
-
-  return ranked[0]?.uri;
+  return undefined;
 }
 
 async function requestGemini(apiKey: string, keyword: string, limit: number) {
