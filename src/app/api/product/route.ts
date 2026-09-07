@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isUsableDestinationUrl } from "@/lib/search/product-url";
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,7 +14,11 @@ export async function GET(request: NextRequest) {
 
     if (!product) return NextResponse.json({ error: "Product not found" }, { status: 404 });
 
-    const prices = product.listings.map((listing) => listing.price);
+    const listings = product.listings.filter((listing) => {
+      const destination = listing.affiliateUrl && listing.affiliateUrl !== "#" ? listing.affiliateUrl : listing.productUrl;
+      return isUsableDestinationUrl(destination, listing.marketplace.slug, listing.price);
+    });
+    const prices = listings.map((listing) => listing.price);
     const lowestPrice = prices.length ? Math.min(...prices) : null;
     const highestPrice = prices.length ? Math.max(...prices) : null;
 
@@ -27,21 +32,24 @@ export async function GET(request: NextRequest) {
       lowestPrice,
       highestPrice,
       savings: lowestPrice !== null && highestPrice !== null ? highestPrice - lowestPrice : 0,
-      listings: product.listings.map((listing) => ({
-        id: listing.id,
-        marketplace: listing.marketplace.name,
-        marketplaceSlug: listing.marketplace.slug,
-        title: listing.title,
-        price: listing.price,
-        seller: listing.seller,
-        rating: listing.rating,
-        reviewCount: listing.reviewCount,
-        soldCount: listing.soldCount,
-        sellerTrustScore: listing.sellerTrustScore,
-        url: listing.affiliateUrl ?? listing.productUrl,
-        inStock: listing.inStock,
-        lastCheckedAt: listing.lastCheckedAt,
-      })),
+      listings: listings.map((listing) => {
+        const destination = listing.affiliateUrl && listing.affiliateUrl !== "#" ? listing.affiliateUrl : listing.productUrl;
+        return {
+          id: listing.id,
+          marketplace: listing.marketplace.name,
+          marketplaceSlug: listing.marketplace.slug,
+          title: listing.title,
+          price: listing.price,
+          seller: listing.seller,
+          rating: listing.rating,
+          reviewCount: listing.reviewCount,
+          soldCount: listing.soldCount,
+          sellerTrustScore: listing.sellerTrustScore,
+          url: destination,
+          inStock: listing.inStock,
+          lastCheckedAt: listing.lastCheckedAt,
+        };
+      }),
     });
   } catch (error) {
     console.error("Product detail failed:", error);
