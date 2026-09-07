@@ -18,10 +18,14 @@ function listingScore(listing: { price: number; soldCount: number | null; rating
   return Math.round(sales + rating + reviews + trust + stock);
 }
 
+/**
+ * The stored productUrl is the canonical destination discovered from the
+ * marketplace/Google result. Never prefer affiliateUrl here: affiliate links
+ * can be stale, redirect to search pages, or be generated from old tracking
+ * data. A comparison result must always open the actual product listing.
+ */
 function destinationUrl(listing: { affiliateUrl: string | null; productUrl: string; marketplace: { slug: string }; price: number }) {
-  if (listing.affiliateUrl && isUsableDestinationUrl(listing.affiliateUrl, listing.marketplace.slug, listing.price)) return listing.affiliateUrl;
-  if (isUsableDestinationUrl(listing.productUrl, listing.marketplace.slug, listing.price)) return listing.productUrl;
-  return null;
+  return isUsableDestinationUrl(listing.productUrl, listing.marketplace.slug, listing.price) ? listing.productUrl : null;
 }
 
 export async function GET(request: NextRequest) {
