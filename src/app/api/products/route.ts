@@ -9,20 +9,19 @@ function popularityScore(soldCount: number | null) {
   return Math.round(Math.log10(soldCount + 1) * 100);
 }
 
-function listingScore(listing: {
-  price: number;
-  soldCount: number | null;
-  rating: number | null;
-  reviewCount: number | null;
-  sellerTrustScore: number | null;
-  inStock: boolean;
-}) {
+function listingScore(listing: { price: number; soldCount: number | null; rating: number | null; reviewCount: number | null; sellerTrustScore: number | null; inStock: boolean }) {
   const sales = popularityScore(listing.soldCount);
   const rating = listing.rating != null ? (Math.max(0, Math.min(5, listing.rating)) / 5) * 20 : 0;
   const reviews = listing.reviewCount != null ? Math.min(15, Math.log10(listing.reviewCount + 1) * 5) : 0;
   const trust = listing.sellerTrustScore != null ? Math.max(0, Math.min(100, listing.sellerTrustScore)) * 0.2 : 0;
   const stock = listing.inStock ? 25 : -100;
   return Math.round(sales + rating + reviews + trust + stock);
+}
+
+function destinationUrl(listing: { affiliateUrl: string | null; productUrl: string; marketplace: { slug: string }; price: number }) {
+  if (listing.affiliateUrl && isUsableDestinationUrl(listing.affiliateUrl, listing.marketplace.slug, listing.price)) return listing.affiliateUrl;
+  if (isUsableDestinationUrl(listing.productUrl, listing.marketplace.slug, listing.price)) return listing.productUrl;
+  return null;
 }
 
 export async function GET(request: NextRequest) {
@@ -66,18 +65,18 @@ export async function GET(request: NextRequest) {
     const normalizedQuery = query.toLowerCase();
     const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
     const scored = products.map((product) => {
-      const validListings = product.listings.filter((listing) => {
-        const destination = listing.affiliateUrl && listing.affiliateUrl !== "#" ? listing.affiliateUrl : listing.productUrl;
-        return isUsableDestinationUrl(destination, listing.marketplace.slug, listing.price);
+      const validListings = product.listings.flatMap((listing) => {
+        const destination = destinationUrl(listing);
+        return destination ? [{ listing, destination }] : [];
       });
       const name = product.name.toLowerCase();
       const brandName = (product.brand ?? "").toLowerCase();
       const categoryName = product.category.toLowerCase();
       const model = (product.modelNumber ?? "").toLowerCase();
       const haystack = `${name} ${brandName} ${categoryName} ${model}`;
-      const bestListing = validListings.reduce<{ listing: (typeof validListings)[number] | null; score: number }>((best, listing) => {
-        const score = listingScore(listing);
-        return score > best.score ? { listing, score } : best;
+      const bestListing = validListings.reduce<{ listing: (typeof validListings)[number]["listing"] | null; score: number }>((best, entry) => {
+        const score = listingScore(entry.listing);
+        return score > best.score ? { listing: entry.listing, score } : best;
       }, { listing: null, score: 0 });
       const popularity = bestListing.score;
       let score = tokens.length ? tokens.reduce((total, token) => total + (haystack.includes(token) ? 40 : 0), 0) : 1;
@@ -90,11 +89,11 @@ export async function GET(request: NextRequest) {
       return { product, validListings, score };
     }).filter(({ validListings, score }) => validListings.length > 0 && score > 0).sort((a, b) => {
       if (sort === "price") {
-        const aPrice = Math.min(...a.validListings.filter((listing) => listing.inStock).map((listing) => listing.price), Number.MAX_SAFE_INTEGER);
-        const bPrice = Math.min(...b.validListings.filter((listing) => listing.inStock).map((listing) => listing.price), Number.MAX_SAFE_INTEGER);
+        const aPrice = Math.min(...a.validListings.filter(({ listing }) => listing.inStock).map(({ listing }) => listing.price), Number.MAX_SAFE_INTEGER);
+        const bPrice = Math.min(...b.validListings.filter(({ listing }) => listing.inStock).map(({ listing }) => listing.price), Number.MAX_SAFE_INTEGER);
         return aPrice - bPrice;
       }
-      return b.score - a.score || (a.validListings[0]?.price ?? Number.MAX_SAFE_INTEGER) - (b.validListings[0]?.price ?? Number.MAX_SAFE_INTEGER);
+      return b.score - a.score || (a.validListings[0]?.listing.price ?? Number.MAX_SAFE_INTEGER) - (b.validListings[0]?.listing.price ?? Number.MAX_SAFE_INTEGER);
     });
 
     const total = scored.length;
@@ -106,26 +105,21 @@ export async function GET(request: NextRequest) {
       category: product.category,
       modelNumber: product.modelNumber,
       score,
-      listings: [...validListings]
-        .map((listing) => {
-          const destination = listing.affiliateUrl && listing.affiliateUrl !== "#" ? listing.affiliateUrl : listing.productUrl;
-          return {
-            id: listing.id,
-            marketplace: listing.marketplace.name,
-            marketplaceSlug: listing.marketplace.slug,
-            price: listing.price,
-            seller: listing.seller,
-            rating: listing.rating,
-            reviewCount: listing.reviewCount,
-            soldCount: listing.soldCount,
-            sellerTrustScore: listing.sellerTrustScore,
-            listingScore: listingScore(listing),
-            url: destination,
-            inStock: listing.inStock,
-            lastCheckedAt: listing.lastCheckedAt,
-          };
-        })
-        .sort((a, b) => b.listingScore - a.listingScore || a.price - b.price),
+      listings: validListings.map(({ listing, destination }) => ({
+        id: listing.id,
+        marketplace: listing.marketplace.name,
+        marketplaceSlug: listing.marketplace.slug,
+        price: listing.price,
+        seller: listing.seller,
+        rating: listing.rating,
+        reviewCount: listing.reviewCount,
+        soldCount: listing.soldCount,
+        sellerTrustScore: listing.sellerTrustScore,
+        listingScore: listingScore(listing),
+        url: destination,
+        inStock: listing.inStock,
+        lastCheckedAt: listing.lastCheckedAt,
+      })).sort((a, b) => b.listingScore - a.listingScore || a.price - b.price),
     }));
 
     return NextResponse.json({ query, filters: { brand, category, marketplace, minPrice: hasMinPrice ? minPrice : null, maxPrice: hasMaxPrice ? maxPrice : null }, sort, page, limit, total, pages: Math.ceil(total / limit), results });
