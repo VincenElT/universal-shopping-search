@@ -1,6 +1,6 @@
 import { normalizeProduct, type NormalizedProduct } from "./product-normalizer";
 
-type CandidateProduct = {
+export type CandidateProduct = {
   id: string;
   name: string;
   brand: string | null;
