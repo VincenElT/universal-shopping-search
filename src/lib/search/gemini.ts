@@ -65,6 +65,54 @@ function marketplaceFromUrl(url: string): DiscoveredListing["marketplace"] {
   return "other";
 }
 
+function isGoogleGroundingRedirect(url: string) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return host === "vertexaisearch.cloud.google.com" && parsed.pathname.startsWith("/grounding-api-redirect/");
+  } catch {
+    return false;
+  }
+}
+
+async function resolveListingUrl(url: string) {
+  if (!isGoogleGroundingRedirect(url)) return url;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(url, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: controller.signal,
+      cache: "no-store",
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; UniversalShoppingSearch/1.0)" },
+    });
+    const resolved = response.url;
+    if (resolved && !isGoogleGroundingRedirect(resolved) && marketplaceFromUrl(resolved) !== "other") return resolved;
+  } catch {}
+  finally {
+    clearTimeout(timeout);
+  }
+
+  const controller2 = new AbortController();
+  const timeout2 = setTimeout(() => controller2.abort(), 5000);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller2.signal,
+      cache: "no-store",
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; UniversalShoppingSearch/1.0)" },
+    });
+    const resolved = response.url;
+    if (resolved && !isGoogleGroundingRedirect(resolved) && marketplaceFromUrl(resolved) !== "other") return resolved;
+  } catch {}
+  finally {
+    clearTimeout(timeout2);
+  }
+  return null;
+}
+
 function normalizeUrl(url: string) {
   const parsed = new URL(url);
   parsed.hash = "";
@@ -102,7 +150,7 @@ function marketplaceUrlFromText(text: string) {
 function bestGroundingUrl(item: GeminiListing, chunks: GroundingChunk[]) {
   if (item.url) return item.url;
   const indexed = item.sourceIndex != null ? chunks[item.sourceIndex]?.web : undefined;
-  if (indexed?.uri && marketplaceFromUrl(indexed.uri) !== "other") return indexed.uri;
+  if (indexed?.uri) return indexed.uri;
   return undefined;
 }
 
@@ -168,20 +216,31 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
 
   const textUrl = marketplaceUrlFromText(text);
   const seen = new Set<string>();
-  return parsedListings.flatMap((item): DiscoveredListing[] => {
+  const resolvedListings = await Promise.all(parsedListings.map(async (item) => {
     const rawUrl = bestGroundingUrl(item, chunks) ?? textUrl;
-    if (!rawUrl || !item.title) return [];
+    if (!rawUrl || !item.title) return null;
+    const resolvedUrl = await resolveListingUrl(rawUrl);
+    if (!resolvedUrl) return null;
     let url: string;
-    try { url = normalizeUrl(rawUrl); } catch { return []; }
+    try { url = normalizeUrl(resolvedUrl); } catch { return null; }
     const marketplace = marketplaceFromUrl(url);
-    if (marketplace === "other") return [];
-    const key = `${marketplace}:${url}`;
-    if (seen.has(key)) return [];
-    seen.add(key);
+    if (marketplace === "other") return null;
     const rating = item.rating == null ? null : Number(item.rating);
     const reviewCount = parseCount(item.reviewCount);
     const soldCount = parseCount(item.soldCount);
     const safeRating = Number.isFinite(rating ?? NaN) ? rating : null;
-    return [{ marketplace, title: item.title, url, price: parseMoney(item.price), seller: item.seller ?? null, rating: safeRating, reviewCount, soldCount, sellerTrustScore: sellerScore(safeRating, reviewCount, soldCount) }];
-  }).filter((listing) => listing.price !== null || listing.sellerTrustScore !== null);
+    return { marketplace, title: item.title, url, price: parseMoney(item.price), seller: item.seller ?? null, rating: safeRating, reviewCount, soldCount, sellerTrustScore: sellerScore(safeRating, reviewCount, soldCount) } satisfies DiscoveredListing;
+  }));
+
+  const results: DiscoveredListing[] = [];
+  for (const listing of resolvedListings) {
+    if (!listing) continue;
+    const key = `${listing.marketplace}:${listing.url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (listing.price === null && listing.sellerTrustScore === null) continue;
+    results.push(listing);
+  }
+  console.log("[gemini-debug] usable", { count: results.length, byMarketplace: Object.groupBy(results, (listing) => listing.marketplace) });
+  return results;
 }
