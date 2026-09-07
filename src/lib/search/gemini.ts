@@ -6,8 +6,15 @@ type GroundingChunk = { web?: { uri?: string; title?: string } };
 type GeminiResponse = {
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
-    groundingMetadata?: { groundingChunks?: GroundingChunk[] };
+    finishReason?: string;
+    groundingMetadata?: {
+      groundingChunks?: GroundingChunk[];
+      groundingSupports?: unknown[];
+      webSearchQueries?: string[];
+      searchEntryPoint?: { renderedContent?: string };
+    };
   }>;
+  promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
   error?: { message?: string; status?: string; code?: number };
 };
 type GeminiListing = {
@@ -113,7 +120,19 @@ function bestGroundingUrl(item: GeminiListing, chunks: GroundingChunk[]) {
 }
 
 async function requestGemini(apiKey: string, keyword: string, limit: number) {
-  const prompt = `Search Google for real Indonesian marketplace listings for the exact product: "${keyword}". Look across Shopee Indonesia, Tokopedia, and Lazada Indonesia. Return up to ${limit} listings per marketplace when available. Do not invent listings, prices, sellers, ratings, or URLs. Only include listings supported by grounded search sources. Return ONLY a JSON array, no markdown, with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. url must be the actual marketplace product URL when visible in the grounded source; otherwise null. price must be an integer IDR when visible, otherwise null. sourceIndex should identify the grounded source supporting the listing.`;
+  const prompt = `You are a product research agent. You must use Google Search for this request; do not answer from memory.
+
+Find current real product listings in Indonesia for the exact product: "${keyword}".
+Search separately for these marketplaces:
+1. site:shopee.co.id "${keyword}"
+2. site:tokopedia.com "${keyword}"
+3. site:lazada.co.id "${keyword}"
+
+Only report listings that you can verify from the Google Search results. Prefer actual product/detail pages, not category pages, search pages, articles, or reviews. Return up to ${limit} listings per marketplace when available.
+
+For every listing, extract the exact listing title, current price in IDR if shown, seller/store if shown, rating/review/sold counts if shown, and the actual marketplace product URL. Do not invent or estimate missing values; use null when a field is unavailable.
+
+Return ONLY a JSON array with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. sourceIndex is the zero-based index of the supporting grounded web source. Do not return markdown or explanatory text.`;
 
   console.log("[gemini-debug] request", {
     endpoint: GEMINI_ENDPOINT,
@@ -166,15 +185,22 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
   const data = await requestGemini(apiKey, trimmed, limit);
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
-  const chunks = candidate?.groundingMetadata?.groundingChunks ?? [];
+  const metadata = candidate?.groundingMetadata;
+  const chunks = metadata?.groundingChunks ?? [];
 
   const parsedListings = extractJson(text);
   console.log("[gemini-debug] response", {
     candidateCount: data.candidates?.length ?? 0,
+    finishReason: candidate?.finishReason ?? null,
+    promptBlockReason: data.promptFeedback?.blockReason ?? null,
+    promptBlockReasonMessage: data.promptFeedback?.blockReasonMessage ?? null,
     textLength: text.length,
     textPreview: text.slice(0, 4000),
     parsedCount: parsedListings.length,
     groundingChunkCount: chunks.length,
+    groundingSupportCount: metadata?.groundingSupports?.length ?? 0,
+    webSearchQueries: metadata?.webSearchQueries ?? [],
+    hasSearchEntryPoint: Boolean(metadata?.searchEntryPoint),
     groundingChunks: chunks.map((chunk, index) => ({
       index,
       title: chunk.web?.title ?? null,
