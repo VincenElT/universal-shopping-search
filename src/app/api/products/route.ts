@@ -3,6 +3,28 @@ import { prisma } from "@/lib/prisma";
 
 const MAX_LIMIT = 50;
 
+function popularityScore(soldCount: number | null) {
+  if (soldCount == null || soldCount <= 0) return 0;
+  // Logarithmic scaling prevents a huge seller from overwhelming every other signal.
+  return Math.round(Math.log10(soldCount + 1) * 100);
+}
+
+function listingScore(listing: {
+  price: number;
+  soldCount: number | null;
+  rating: number | null;
+  reviewCount: number | null;
+  sellerTrustScore: number | null;
+  inStock: boolean;
+}) {
+  const sales = popularityScore(listing.soldCount);
+  const rating = listing.rating != null ? (Math.max(0, Math.min(5, listing.rating)) / 5) * 20 : 0;
+  const reviews = listing.reviewCount != null ? Math.min(15, Math.log10(listing.reviewCount + 1) * 5) : 0;
+  const trust = listing.sellerTrustScore != null ? Math.max(0, Math.min(100, listing.sellerTrustScore)) * 0.2 : 0;
+  const stock = listing.inStock ? 25 : -100;
+  return Math.round(sales + rating + reviews + trust + stock);
+}
+
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
@@ -37,7 +59,6 @@ export async function GET(request: NextRequest) {
             ...(hasMinPrice || hasMaxPrice ? { price: { ...(hasMinPrice ? { gte: minPrice! } : {}), ...(hasMaxPrice ? { lte: maxPrice! } : {}) } } : {}),
           },
           include: { marketplace: true },
-          orderBy: [{ sellerTrustScore: "desc" }, { price: "asc" }],
         },
       },
     });
@@ -50,15 +71,26 @@ export async function GET(request: NextRequest) {
       const categoryName = product.category.toLowerCase();
       const model = (product.modelNumber ?? "").toLowerCase();
       const haystack = `${name} ${brandName} ${categoryName} ${model}`;
+      const bestListing = product.listings.reduce<{ listing: (typeof product.listings)[number] | null; score: number }>((best, listing) => {
+        const score = listingScore(listing);
+        return score > best.score ? { listing, score } : best;
+      }, { listing: null, score: 0 });
+      const popularity = bestListing.score;
       let score = tokens.length ? tokens.reduce((total, token) => total + (haystack.includes(token) ? 40 : 0), 0) : 1;
       if (name === normalizedQuery) score += 1000;
       else if (name.includes(normalizedQuery)) score += 500;
       if (brandName === normalizedQuery) score += 350;
       if (model === normalizedQuery) score += 400;
       if (categoryName === normalizedQuery) score += 250;
+      // Popular, available listings get a meaningful boost without overpowering exact matches.
+      score += popularity;
       return { product, score };
     }).filter(({ score }) => score > 0).sort((a, b) => {
-      if (sort === "price") return (a.product.listings[0]?.price ?? Number.MAX_SAFE_INTEGER) - (b.product.listings[0]?.price ?? Number.MAX_SAFE_INTEGER);
+      if (sort === "price") {
+        const aPrice = Math.min(...a.product.listings.filter((listing) => listing.inStock).map((listing) => listing.price), Number.MAX_SAFE_INTEGER);
+        const bPrice = Math.min(...b.product.listings.filter((listing) => listing.inStock).map((listing) => listing.price), Number.MAX_SAFE_INTEGER);
+        return aPrice - bPrice;
+      }
       return b.score - a.score || (a.product.listings[0]?.price ?? Number.MAX_SAFE_INTEGER) - (b.product.listings[0]?.price ?? Number.MAX_SAFE_INTEGER);
     });
 
@@ -71,20 +103,23 @@ export async function GET(request: NextRequest) {
       category: product.category,
       modelNumber: product.modelNumber,
       score,
-      listings: product.listings.map((listing) => ({
-        id: listing.id,
-        marketplace: listing.marketplace.name,
-        marketplaceSlug: listing.marketplace.slug,
-        price: listing.price,
-        seller: listing.seller,
-        rating: listing.rating,
-        reviewCount: listing.reviewCount,
-        soldCount: listing.soldCount,
-        sellerTrustScore: listing.sellerTrustScore,
-        url: listing.affiliateUrl ?? listing.productUrl,
-        inStock: listing.inStock,
-        lastCheckedAt: listing.lastCheckedAt,
-      })),
+      listings: [...product.listings]
+        .map((listing) => ({
+          id: listing.id,
+          marketplace: listing.marketplace.name,
+          marketplaceSlug: listing.marketplace.slug,
+          price: listing.price,
+          seller: listing.seller,
+          rating: listing.rating,
+          reviewCount: listing.reviewCount,
+          soldCount: listing.soldCount,
+          sellerTrustScore: listing.sellerTrustScore,
+          listingScore: listingScore(listing),
+          url: listing.affiliateUrl ?? listing.productUrl,
+          inStock: listing.inStock,
+          lastCheckedAt: listing.lastCheckedAt,
+        }))
+        .sort((a, b) => b.listingScore - a.listingScore || a.price - b.price),
     }));
 
     return NextResponse.json({ query, filters: { brand, category, marketplace, minPrice: hasMinPrice ? minPrice : null, maxPrice: hasMaxPrice ? maxPrice : null }, sort, page, limit, total, pages: Math.ceil(total / limit), results });
