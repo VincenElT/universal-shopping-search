@@ -2,42 +2,19 @@ import { prisma } from "@/lib/prisma";
 import { findBestProductMatch, type CandidateProduct } from "@/lib/product-matcher";
 import { normalizeProduct } from "@/lib/product-normalizer";
 import type { DiscoveredListing } from "./serper";
+import { extractListingData } from "./extract";
+import { validateListing } from "./validate";
 
-export type EnrichedDiscoveredListing = DiscoveredListing & {
-  price: number | null;
-  seller: string | null;
-  inStock: boolean;
-};
-
-function parsePrice(text: string) {
-  const matches = [...text.matchAll(/(?:Rp\.?\s*)?([0-9]{1,3}(?:[.][0-9]{3})+|[0-9]{5,})/gi)]
-    .map((match) => Number(match[1].replace(/\./g, "")))
-    .filter((value) => Number.isFinite(value) && value >= 1000 && value <= 100_000_000);
-  return matches[0] ?? null;
-}
-
-function sellerFromUrl(listing: DiscoveredListing) {
-  try {
-    const path = new URL(listing.url).pathname.split("/").filter(Boolean);
-    if (listing.marketplace === "tokopedia" && path.length >= 2) return decodeURIComponent(path[0]);
-  } catch {}
-  return null;
-}
-
-export function enrichDiscoveredListing(listing: DiscoveredListing): EnrichedDiscoveredListing {
-  const text = `${listing.title} ${listing.snippet ?? ""}`;
-  return {
-    ...listing,
-    price: listing.price ?? parsePrice(listing.snippet ?? listing.title),
-    seller: listing.seller ?? sellerFromUrl(listing),
-    inStock: !/habis|sold\s*out|out\s*of\s*stock|stok\s*habis/i.test(text),
-  };
-}
+export type EnrichedDiscoveredListing = DiscoveredListing & ReturnType<typeof extractListingData>;
 
 function candidatesFor(normalized: ReturnType<typeof normalizeProduct>, candidates: CandidateProduct[]) {
   return candidates.filter((candidate) =>
     candidate.category === normalized.category && (!normalized.brand || candidate.brand === normalized.brand),
   );
+}
+
+export function enrichDiscoveredListing(listing: DiscoveredListing): EnrichedDiscoveredListing {
+  return { ...listing, ...extractListingData(listing) };
 }
 
 export async function ingestDiscoveredListings(listings: DiscoveredListing[]) {
@@ -50,10 +27,13 @@ export async function ingestDiscoveredListings(listings: DiscoveredListing[]) {
   let upsertedListings = 0;
   let recordedSnapshots = 0;
   let skippedListings = 0;
+  let observations = 0;
 
   for (const listing of enriched) {
-    if (!listing.price || listing.marketplace === "other") {
+    const validation = validateListing(listing, listing);
+    if (!validation.valid || listing.price == null || listing.marketplace === "other") {
       skippedListings += 1;
+      results.push({ listing, status: "skipped", reason: validation.flags.join(", ") || "invalid listing" });
       continue;
     }
 
@@ -115,6 +95,32 @@ export async function ingestDiscoveredListings(listings: DiscoveredListing[]) {
     });
     upsertedListings += 1;
 
+    await prisma.listingObservation.create({
+      data: {
+        listingId: saved.id,
+        source: "google_serper_shopping",
+        sourceUrl: listing.url,
+        rawTitle: listing.title,
+        rawPrice: listing.price == null ? null : String(listing.price),
+        rawSeller: listing.seller,
+        rawRating: listing.rating == null ? null : String(listing.rating),
+        rawReviewCount: listing.reviewCount == null ? null : String(listing.reviewCount),
+        rawSoldCount: listing.soldCount == null ? null : String(listing.soldCount),
+        extractedData: JSON.stringify({
+          price: listing.price,
+          seller: listing.seller,
+          rating: listing.rating,
+          reviewCount: listing.reviewCount,
+          soldCount: listing.soldCount,
+          inStock: listing.inStock,
+          fields: listing.fields,
+          validationFlags: validation.flags,
+        }),
+        confidence: validation.confidence,
+      },
+    });
+    observations += 1;
+
     const changed = !existing || existing.price !== listing.price || existing.inStock !== listing.inStock;
     if (changed) {
       await prisma.priceHistory.create({ data: { listingId: saved.id, price: listing.price, inStock: listing.inStock } });
@@ -126,9 +132,21 @@ export async function ingestDiscoveredListings(listings: DiscoveredListing[]) {
     results.push({
       listing,
       productId: product.id,
+      confidence: validation.confidence,
+      flags: validation.flags,
       status: decision.status === "match" ? "matched" : "created",
     });
   }
 
-  return { results, stats: { discovered: listings.length, createdProducts, upsertedListings, recordedSnapshots, skippedListings } };
+  return {
+    results,
+    stats: {
+      discovered: listings.length,
+      createdProducts,
+      upsertedListings,
+      recordedSnapshots,
+      observations,
+      skippedListings,
+    },
+  };
 }
