@@ -58,7 +58,6 @@ function extractFamily(product: NormalizedProduct) {
     if (/\bfury\s+beast\b/.test(text)) return "fury beast";
   }
 
-  // Fall back to the explicit/inferred model when there is no known family rule.
   return product.modelNumber ? clean(product.modelNumber) : null;
 }
 
@@ -69,8 +68,6 @@ function hasFamilyConflict(a: NormalizedProduct, b: NormalizedProduct) {
   if (!aFamily || !bFamily) return null;
   if (aFamily === bFamily) return false;
 
-  // Known families are intentionally strict: T7 and T7 Shield, or G502 HERO and
-  // G502 X, should never collapse into one canonical product.
   if (aFamily.startsWith("t7") && bFamily.startsWith("t7")) return "product family conflict";
   if (aFamily.startsWith("g502") && bFamily.startsWith("g502")) return "product family conflict";
 
@@ -122,10 +119,6 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
       score += 70;
       reasons.push("exact model");
     } else {
-      // An inferred model is not enough to reject a candidate that otherwise
-      // has strong family/attribute agreement. Only explicit-looking conflicts
-      // should become a hard rejection, and family/variant checks handle the
-      // important cases such as G502 HERO vs G502 X.
       const inputFamily = extractFamily(input);
       const candidateFamily = extractFamily(normalizedCandidate);
       if (inputFamily && candidateFamily && inputFamily !== candidateFamily) {
@@ -147,7 +140,8 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
 
   const inputFamily = extractFamily(input);
   const candidateFamily = extractFamily(normalizedCandidate);
-  if (inputFamily && candidateFamily && inputFamily === candidateFamily) {
+  const sameFamily = Boolean(inputFamily && candidateFamily && inputFamily === candidateFamily);
+  if (sameFamily) {
     score += 25;
     reasons.push("product family match");
   }
@@ -193,7 +187,21 @@ export function findBestProductMatch(input: NormalizedProduct, candidates: Candi
   }
 
   const second = scored[1];
-  if (best.status === "match" && second && second.status === "match" && second.score >= best.score - 5) {
+
+  // Only treat a close second as ambiguous when it is genuinely compatible
+  // with the same product family. A rejected candidate (capacity/family/etc.)
+  // must not make an otherwise strong match ambiguous.
+  const bestFamily = extractFamily(normalizeProduct(best.product!));
+  const secondFamily = second?.product ? extractFamily(normalizeProduct(second.product)) : null;
+  const sameFamily = Boolean(bestFamily && secondFamily && bestFamily === secondFamily);
+
+  if (
+    best.status === "match" &&
+    second &&
+    second.status === "match" &&
+    second.score >= best.score - 5 &&
+    sameFamily
+  ) {
     return { product: null, score: best.score, status: "ambiguous", reasons: ["multiple close candidates", ...best.reasons] };
   }
 
