@@ -28,8 +28,8 @@ export function enrichDiscoveredListing(listing: DiscoveredListing): EnrichedDis
   const text = `${listing.title} ${listing.snippet ?? ""}`;
   return {
     ...listing,
-    price: parsePrice(listing.snippet ?? listing.title),
-    seller: sellerFromUrl(listing),
+    price: listing.price ?? parsePrice(listing.snippet ?? listing.title),
+    seller: listing.seller ?? sellerFromUrl(listing),
     inStock: !/habis|sold\s*out|out\s*of\s*stock|stok\s*habis/i.test(text),
   };
 }
@@ -81,16 +81,20 @@ export async function ingestDiscoveredListings(listings: DiscoveredListing[]) {
     });
 
     const existing = await prisma.marketplaceListing.findUnique({
-      where: { productId_marketplaceId: { productId: product.id, marketplaceId: marketplace.id } },
+      where: { productId_marketplaceId_productUrl: { productId: product.id, marketplaceId: marketplace.id, productUrl: listing.url } },
       select: { id: true, price: true, inStock: true },
     });
 
     const saved = await prisma.marketplaceListing.upsert({
-      where: { productId_marketplaceId: { productId: product.id, marketplaceId: marketplace.id } },
+      where: { productId_marketplaceId_productUrl: { productId: product.id, marketplaceId: marketplace.id, productUrl: listing.url } },
       update: {
         title: listing.title,
         price: listing.price,
         seller: listing.seller,
+        rating: listing.rating ?? undefined,
+        reviewCount: listing.reviewCount ?? undefined,
+        soldCount: listing.soldCount ?? undefined,
+        sellerTrustScore: listing.sellerTrustScore ?? undefined,
         productUrl: listing.url,
         inStock: listing.inStock,
         lastCheckedAt: new Date(),
@@ -101,6 +105,10 @@ export async function ingestDiscoveredListings(listings: DiscoveredListing[]) {
         title: listing.title,
         price: listing.price,
         seller: listing.seller,
+        rating: listing.rating,
+        reviewCount: listing.reviewCount,
+        soldCount: listing.soldCount,
+        sellerTrustScore: listing.sellerTrustScore,
         productUrl: listing.url,
         inStock: listing.inStock,
       },
@@ -115,7 +123,11 @@ export async function ingestDiscoveredListings(listings: DiscoveredListing[]) {
       skippedListings += 1;
     }
 
-    results.push({ listing, productId: product.id, status: decision.status === "match" ? "matched" : "created" });
+    results.push({
+      listing,
+      productId: product.id,
+      status: decision.status === "match" ? "matched" : "created",
+    });
   }
 
   return { results, stats: { discovered: listings.length, createdProducts, upsertedListings, recordedSnapshots, skippedListings } };
