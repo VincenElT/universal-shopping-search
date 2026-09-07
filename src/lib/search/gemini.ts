@@ -86,7 +86,7 @@ function extractJson(text: string): GeminiListing[] {
 }
 
 async function requestGemini(apiKey: string, keyword: string, limit: number) {
-  const prompt = `Search Google for real Indonesian marketplace listings for the exact product: "${keyword}". Look across Shopee Indonesia, Tokopedia, and Lazada Indonesia. Return up to ${limit} listings per marketplace when available. Do not invent listings, prices, sellers, ratings, or URLs. Only include listings supported by grounded search sources. Return ONLY a JSON array, no markdown, with objects containing: title, price, seller, rating, reviewCount, soldCount, sourceIndex. price must be an integer IDR when visible, otherwise null. sourceIndex must identify the corresponding grounded source.`;
+  const prompt = `Search Google for real Indonesian marketplace listings for the exact product: "${keyword}". Look across Shopee Indonesia, Tokopedia, and Lazada Indonesia. Return up to ${limit} listings per marketplace when available. Do not invent listings, prices, sellers, ratings, or URLs. Only include listings supported by grounded search sources. Return ONLY a JSON array, no markdown, with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. url must be the actual marketplace product URL when visible in the grounded source; otherwise null. price must be an integer IDR when visible, otherwise null. sourceIndex must be the zero-based index of the corresponding grounded source.`;
   const response = await fetch(GEMINI_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -119,8 +119,13 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
 
   const seen = new Set<string>();
   return extractJson(text).flatMap((item): DiscoveredListing[] => {
-    const groundedUrl = item.sourceIndex != null ? chunks[item.sourceIndex]?.web?.uri : undefined;
-    const rawUrl = groundedUrl ?? item.url;
+    const sourceUrls = [
+      item.url,
+      item.sourceIndex != null ? chunks[item.sourceIndex]?.web?.uri : undefined,
+      item.sourceIndex != null && item.sourceIndex > 0 ? chunks[item.sourceIndex - 1]?.web?.uri : undefined,
+    ].filter((value): value is string => Boolean(value));
+
+    const rawUrl = sourceUrls.find((candidateUrl) => marketplaceFromUrl(candidateUrl) !== "other");
     if (!rawUrl || !item.title) return [];
 
     let url: string;
