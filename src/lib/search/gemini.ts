@@ -1,6 +1,7 @@
 import type { DiscoveredListing } from "./serper";
 
 const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+const GEMINI_TIMEOUT_MS = 10_000;
 
 type GroundingChunk = { web?: { uri?: string; title?: string } };
 type GeminiResponse = {
@@ -12,7 +13,7 @@ type GeminiResponse = {
 };
 type GeminiListing = {
   title?: string;
-  url?: string;
+  url?: string | null;
   price?: number | string | null;
   seller?: string | null;
   rating?: number | string | null;
@@ -85,25 +86,62 @@ function extractJson(text: string): GeminiListing[] {
   }
 }
 
-async function requestGemini(apiKey: string, keyword: string, limit: number) {
-  const prompt = `Search Google for real Indonesian marketplace listings for the exact product: "${keyword}". Look across Shopee Indonesia, Tokopedia, and Lazada Indonesia. Return up to ${limit} listings per marketplace when available. Do not invent listings, prices, sellers, ratings, or URLs. Only include listings supported by grounded search sources. Return ONLY a JSON array, no markdown, with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. url must be the actual marketplace product URL when visible in the grounded source; otherwise null. price must be an integer IDR when visible, otherwise null. sourceIndex must be the zero-based index of the corresponding grounded source.`;
-  const response = await fetch(GEMINI_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      tools: [{ google_search: {} }],
-      generationConfig: { temperature: 0 },
-    }),
-    cache: "no-store",
-  });
+function marketplaceUrlFromText(text: string) {
+  const urls = text.match(/https?:\/\/[^\s"'<>]+/gi) ?? [];
+  return urls.find((url) => marketplaceFromUrl(url) !== "other");
+}
 
-  const data = (await response.json().catch(() => ({}))) as GeminiResponse;
-  if (!response.ok) {
-    const detail = data.error?.message ? ` ${data.error.message}` : "";
-    throw new Error(`Gemini API returned HTTP ${response.status}.${detail}`);
+function bestGroundingUrl(item: GeminiListing, chunks: GroundingChunk[]) {
+  const explicit = item.url && marketplaceFromUrl(item.url) !== "other" ? item.url : undefined;
+  if (explicit) return explicit;
+
+  const indexed = item.sourceIndex != null ? chunks[item.sourceIndex]?.web : undefined;
+  if (indexed?.uri && marketplaceFromUrl(indexed.uri) !== "other") return indexed.uri;
+
+  const titleTokens = (item.title ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 3);
+  const ranked = chunks
+    .map((chunk, index) => {
+      const uri = chunk.web?.uri;
+      if (!uri || marketplaceFromUrl(uri) === "other") return null;
+      const sourceTitle = (chunk.web?.title ?? "").toLowerCase();
+      const score = titleTokens.reduce((sum, token) => sum + (sourceTitle.includes(token) ? 1 : 0), 0);
+      return { uri, index, score };
+    })
+    .filter((value): value is { uri: string; index: number; score: number } => value !== null)
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+
+  return ranked[0]?.uri;
+}
+
+async function requestGemini(apiKey: string, keyword: string, limit: number) {
+  const prompt = `Search Google for real Indonesian marketplace listings for the exact product: "${keyword}". Look across Shopee Indonesia, Tokopedia, and Lazada Indonesia. Return up to ${limit} listings per marketplace when available. Do not invent listings, prices, sellers, ratings, or URLs. Only include listings supported by grounded search sources. Return ONLY a JSON array, no markdown, with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. url must be the actual marketplace product URL when visible in the grounded source; otherwise null. price must be an integer IDR when visible, otherwise null. sourceIndex should identify the grounded source supporting the listing.`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+  try {
+    const response = await fetch(GEMINI_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0 },
+      }),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    const data = (await response.json().catch(() => ({}))) as GeminiResponse;
+    if (!response.ok) {
+      const detail = data.error?.message ? ` ${data.error.message}` : "";
+      throw new Error(`Gemini API returned HTTP ${response.status}.${detail}`);
+    }
+    return data;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error("Gemini request timed out.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return data;
 }
 
 export async function discoverListingsWithGemini(keyword: string, options?: { limit?: number }) {
@@ -116,16 +154,11 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
   const chunks = candidate?.groundingMetadata?.groundingChunks ?? [];
+  const textUrl = marketplaceUrlFromText(text);
 
   const seen = new Set<string>();
   return extractJson(text).flatMap((item): DiscoveredListing[] => {
-    const sourceUrls = [
-      item.url,
-      item.sourceIndex != null ? chunks[item.sourceIndex]?.web?.uri : undefined,
-      item.sourceIndex != null && item.sourceIndex > 0 ? chunks[item.sourceIndex - 1]?.web?.uri : undefined,
-    ].filter((value): value is string => Boolean(value));
-
-    const rawUrl = sourceUrls.find((candidateUrl) => marketplaceFromUrl(candidateUrl) !== "other");
+    const rawUrl = bestGroundingUrl(item, chunks) ?? textUrl;
     if (!rawUrl || !item.title) return [];
 
     let url: string;
