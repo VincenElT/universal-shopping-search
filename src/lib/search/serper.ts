@@ -5,6 +5,8 @@ import { discoverListingsWithGemini } from "./gemini";
 const DEFAULT_ENDPOINT = "https://google.serper.dev/search";
 const SHOPPING_ENDPOINT = "https://google.serper.dev/shopping";
 
+type SearchProvider = "auto" | "serper" | "gemini";
+
 export type DiscoveredListing = {
   marketplace: "shopee" | "tokopedia" | "lazada" | "other";
   title: string;
@@ -40,10 +42,12 @@ function isProductUrl(listing: DiscoveredListing) { const parsed = new URL(listi
 export function cleanAndDeduplicateListings(listings: DiscoveredListing[]) { const seen = new Set<string>(); return listings.flatMap((listing) => { if (listing.marketplace === "other") return []; let url: string; try { url = normalizeUrl(listing.url); } catch { return []; } const normalizedListing = { ...listing, url }; if (!isProductUrl(normalizedListing)) return []; const key = `${listing.marketplace}:${url}`; if (seen.has(key)) return []; seen.add(key); return [normalizedListing]; }); }
 export function matchDiscoveredListings(listings: DiscoveredListing[], candidates: CandidateProduct[]) { return cleanAndDeduplicateListings(listings).map<MatchedDiscoveredListing>((listing) => { const normalized = normalizeProduct({ name: listing.title }); const match = findBestProductMatch(normalized, candidates); return { ...listing, normalized, match }; }); }
 
-export async function discoverListings(keyword: string, options?: { limit?: number }) {
-  if (process.env.SEARCH_PROVIDER === "gemini") return discoverListingsWithGemini(keyword, options);
-  const trimmed = keyword.trim(); if (!trimmed) throw new Error("Search keyword is required.");
-  const apiKey = requiredEnv("SERPER_API_KEY"); const endpoint = process.env.SERPER_API_URL || DEFAULT_ENDPOINT; const limit = Math.min(20, Math.max(1, options?.limit ?? 10));
+async function discoverWithSerper(keyword: string, options?: { limit?: number }) {
+  const trimmed = keyword.trim();
+  if (!trimmed) throw new Error("Search keyword is required.");
+  const apiKey = requiredEnv("SERPER_API_KEY");
+  const endpoint = process.env.SERPER_API_URL || DEFAULT_ENDPOINT;
+  const limit = Math.min(20, Math.max(1, options?.limit ?? 10));
   const marketplaces = [
     { name: "shopee", query: `site:shopee.co.id ${trimmed}` },
     { name: "tokopedia", query: `site:tokopedia.com ${trimmed}` },
@@ -71,4 +75,39 @@ export async function discoverListings(keyword: string, options?: { limit?: numb
   }));
   const cleaned = cleanAndDeduplicateListings(responses.flat());
   return cleaned.filter((listing) => listing.sellerTrustScore !== null || listing.price !== null).sort((a, b) => (b.sellerTrustScore ?? -1) - (a.sellerTrustScore ?? -1) || (a.position ?? 999) - (b.position ?? 999));
+}
+
+function configuredProvider(): SearchProvider {
+  const value = process.env.SEARCH_PROVIDER?.trim().toLowerCase();
+  if (value === "serper" || value === "gemini" || value === "auto") return value;
+  return "auto";
+}
+
+function shouldFallbackToSerper(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Gemini API returned HTTP 429") || message.includes("Gemini API returned HTTP 5") || message.includes("GEMINI_API_KEY is not configured") || message.includes("Gemini request failed");
+}
+
+export async function discoverListings(keyword: string, options?: { limit?: number }) {
+  const provider = configuredProvider();
+  if (provider === "serper") return discoverWithSerper(keyword, options);
+
+  try {
+    const geminiListings = await discoverListingsWithGemini(keyword, options);
+    if (geminiListings.length > 0 || provider === "gemini") return geminiListings;
+    if (provider === "gemini") return geminiListings;
+  } catch (error) {
+    if (provider === "gemini" && !shouldFallbackToSerper(error)) throw error;
+    if (provider === "gemini" || provider === "auto") {
+      try {
+        return await discoverWithSerper(keyword, options);
+      } catch (fallbackError) {
+        throw new Error(`${error instanceof Error ? error.message : String(error)} Serper fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+      }
+    }
+    throw error;
+  }
+
+  if (provider === "auto") return discoverWithSerper(keyword, options);
+  return [];
 }
