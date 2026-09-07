@@ -8,14 +8,14 @@ datasource db {
 }
 
 model Product {
-  id          String            @id @default(cuid())
+  id          String               @id @default(cuid())
   name        String
   brand       String?
   category    String
   modelNumber String?
   imageUrl    String?
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
   listings    MarketplaceListing[]
 
   @@index([brand])
@@ -33,27 +33,30 @@ model Marketplace {
 }
 
 model MarketplaceListing {
-  id            String      @id @default(cuid())
-  productId     String
-  marketplaceId String
-  title         String
-  price         Int
-  seller        String?
-  rating        Float?
-  reviewCount   Int?
-  productUrl    String
-  affiliateUrl  String?
-  inStock       Boolean     @default(true)
-  lastCheckedAt DateTime    @default(now())
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
-  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Cascade)
-  priceHistory  PriceHistory[]
+  id                String             @id @default(cuid())
+  productId         String
+  marketplaceId     String
+  title             String
+  price             Int
+  seller            String?
+  rating            Float?
+  reviewCount       Int?
+  soldCount         Int?
+  sellerTrustScore  Int?
+  productUrl        String
+  affiliateUrl      String?
+  inStock           Boolean            @default(true)
+  lastCheckedAt     DateTime           @default(now())
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  product           Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  marketplace       Marketplace        @relation(fields: [marketplaceId], references: [id], onDelete: Cascade)
+  priceHistory      PriceHistory[]
 
-  @@unique([productId, marketplaceId])
+  @@unique([productId, marketplaceId, productUrl])
   @@index([marketplaceId])
   @@index([price])
+  @@index([sellerTrustScore])
   @@index([lastCheckedAt])
 }
 
@@ -61,8 +64,8 @@ model PriceHistory {
   id        String             @id @default(cuid())
   listingId String
   price     Int
-  inStock   Boolean
-  observedAt DateTime          @default(now())
+  inStock   Boolean            
+  observedAt DateTime           @default(now())
   listing   MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
   @@index([listingId, observedAt])
