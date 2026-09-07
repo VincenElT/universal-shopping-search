@@ -1,6 +1,6 @@
 import type { DiscoveredListing } from "./serper";
 
-const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent";
+const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
 type GroundingChunk = { web?: { uri?: string; title?: string } };
 type GeminiResponse = {
@@ -106,28 +106,13 @@ async function requestGemini(apiKey: string, keyword: string, limit: number) {
   return data;
 }
 
-async function searchWithRetry(apiKey: string, keyword: string, limit: number) {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return await requestGemini(apiKey, keyword, limit);
-    } catch (error) {
-      lastError = error;
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes("HTTP 429") || attempt === 2) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 800 * 2 ** attempt));
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("Gemini request failed.");
-}
-
 export async function discoverListingsWithGemini(keyword: string, options?: { limit?: number }) {
   const trimmed = keyword.trim();
   if (!trimmed) throw new Error("Search keyword is required.");
 
   const apiKey = requiredEnv("GEMINI_API_KEY");
   const limit = Math.min(10, Math.max(1, options?.limit ?? 5));
-  const data = await searchWithRetry(apiKey, trimmed, limit);
+  const data = await requestGemini(apiKey, trimmed, limit);
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
   const chunks = candidate?.groundingMetadata?.groundingChunks ?? [];
