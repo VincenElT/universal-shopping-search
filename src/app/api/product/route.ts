@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
 
     const product = await prisma.product.findUnique({
       where: { id },
-      include: { listings: { include: { marketplace: true }, orderBy: { price: "asc" } } },
+      include: { listings: { include: { marketplace: true }, orderBy: [{ sellerTrustScore: "desc" }, { price: "asc" }] } },
     });
 
     if (!product) return NextResponse.json({ error: "Product not found" }, { status: 404 });
@@ -36,6 +36,8 @@ export async function GET(request: NextRequest) {
         seller: listing.seller,
         rating: listing.rating,
         reviewCount: listing.reviewCount,
+        soldCount: listing.soldCount,
+        sellerTrustScore: listing.sellerTrustScore,
         url: listing.affiliateUrl ?? listing.productUrl,
         inStock: listing.inStock,
         lastCheckedAt: listing.lastCheckedAt,
