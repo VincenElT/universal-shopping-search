@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isUsableDestinationUrl } from "@/lib/search/product-url";
 
 const MAX_LIMIT = 50;
 
 function popularityScore(soldCount: number | null) {
   if (soldCount == null || soldCount <= 0) return 0;
-  // Logarithmic scaling prevents a huge seller from overwhelming every other signal.
   return Math.round(Math.log10(soldCount + 1) * 100);
 }
 
@@ -66,12 +66,16 @@ export async function GET(request: NextRequest) {
     const normalizedQuery = query.toLowerCase();
     const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
     const scored = products.map((product) => {
+      const validListings = product.listings.filter((listing) => {
+        const destination = listing.affiliateUrl && listing.affiliateUrl !== "#" ? listing.affiliateUrl : listing.productUrl;
+        return isUsableDestinationUrl(destination, listing.marketplace.slug, listing.price);
+      });
       const name = product.name.toLowerCase();
       const brandName = (product.brand ?? "").toLowerCase();
       const categoryName = product.category.toLowerCase();
       const model = (product.modelNumber ?? "").toLowerCase();
       const haystack = `${name} ${brandName} ${categoryName} ${model}`;
-      const bestListing = product.listings.reduce<{ listing: (typeof product.listings)[number] | null; score: number }>((best, listing) => {
+      const bestListing = validListings.reduce<{ listing: (typeof validListings)[number] | null; score: number }>((best, listing) => {
         const score = listingScore(listing);
         return score > best.score ? { listing, score } : best;
       }, { listing: null, score: 0 });
@@ -82,43 +86,45 @@ export async function GET(request: NextRequest) {
       if (brandName === normalizedQuery) score += 350;
       if (model === normalizedQuery) score += 400;
       if (categoryName === normalizedQuery) score += 250;
-      // Popular, available listings get a meaningful boost without overpowering exact matches.
       score += popularity;
-      return { product, score };
-    }).filter(({ score }) => score > 0).sort((a, b) => {
+      return { product, validListings, score };
+    }).filter(({ validListings, score }) => validListings.length > 0 && score > 0).sort((a, b) => {
       if (sort === "price") {
-        const aPrice = Math.min(...a.product.listings.filter((listing) => listing.inStock).map((listing) => listing.price), Number.MAX_SAFE_INTEGER);
-        const bPrice = Math.min(...b.product.listings.filter((listing) => listing.inStock).map((listing) => listing.price), Number.MAX_SAFE_INTEGER);
+        const aPrice = Math.min(...a.validListings.filter((listing) => listing.inStock).map((listing) => listing.price), Number.MAX_SAFE_INTEGER);
+        const bPrice = Math.min(...b.validListings.filter((listing) => listing.inStock).map((listing) => listing.price), Number.MAX_SAFE_INTEGER);
         return aPrice - bPrice;
       }
-      return b.score - a.score || (a.product.listings[0]?.price ?? Number.MAX_SAFE_INTEGER) - (b.product.listings[0]?.price ?? Number.MAX_SAFE_INTEGER);
+      return b.score - a.score || (a.validListings[0]?.price ?? Number.MAX_SAFE_INTEGER) - (b.validListings[0]?.price ?? Number.MAX_SAFE_INTEGER);
     });
 
     const total = scored.length;
     const start = (page - 1) * limit;
-    const results = scored.slice(start, start + limit).map(({ product, score }) => ({
+    const results = scored.slice(start, start + limit).map(({ product, validListings, score }) => ({
       id: product.id,
       name: product.name,
       brand: product.brand,
       category: product.category,
       modelNumber: product.modelNumber,
       score,
-      listings: [...product.listings]
-        .map((listing) => ({
-          id: listing.id,
-          marketplace: listing.marketplace.name,
-          marketplaceSlug: listing.marketplace.slug,
-          price: listing.price,
-          seller: listing.seller,
-          rating: listing.rating,
-          reviewCount: listing.reviewCount,
-          soldCount: listing.soldCount,
-          sellerTrustScore: listing.sellerTrustScore,
-          listingScore: listingScore(listing),
-          url: listing.affiliateUrl ?? listing.productUrl,
-          inStock: listing.inStock,
-          lastCheckedAt: listing.lastCheckedAt,
-        }))
+      listings: [...validListings]
+        .map((listing) => {
+          const destination = listing.affiliateUrl && listing.affiliateUrl !== "#" ? listing.affiliateUrl : listing.productUrl;
+          return {
+            id: listing.id,
+            marketplace: listing.marketplace.name,
+            marketplaceSlug: listing.marketplace.slug,
+            price: listing.price,
+            seller: listing.seller,
+            rating: listing.rating,
+            reviewCount: listing.reviewCount,
+            soldCount: listing.soldCount,
+            sellerTrustScore: listing.sellerTrustScore,
+            listingScore: listingScore(listing),
+            url: destination,
+            inStock: listing.inStock,
+            lastCheckedAt: listing.lastCheckedAt,
+          };
+        })
         .sort((a, b) => b.listingScore - a.listingScore || a.price - b.price),
     }));
 
