@@ -39,17 +39,25 @@ function normalizeCapacity(value?: string) {
   return Number(match[1]) * (match[2] === "TB" ? 1000 : 1);
 }
 
+function capacityValues(product: NormalizedProduct) {
+  const values = product.attributes.capacities?.split(",").filter(Boolean) ?? [];
+  if (product.attributes.capacity) values.push(product.attributes.capacity);
+  return [...new Set(values.map(normalizeCapacity).filter((value): value is number => value !== null))];
+}
+
 function extractFamily(product: NormalizedProduct) {
   const text = clean(product.name);
 
   if (product.brand === "Samsung") {
-    const t7 = text.match(/\bt7\b(?:\s+shield)?/);
-    if (t7) return t7[0];
+    if (/\bt7\s+shield\b/.test(text)) return "t7 shield";
+    if (/\bt7\s+touch\b/.test(text)) return "t7 touch";
+    if (/\bt7\b/.test(text)) return "t7";
   }
 
   if (product.brand === "Logitech") {
-    const g502 = text.match(/\bg502(?:\s+x|\s+hero)?\b/);
-    if (g502) return g502[0];
+    if (/\bg502\s+x\b/.test(text)) return "g502 x";
+    if (/\bg502\s+hero\b/.test(text)) return "g502 hero";
+    if (/\bg502\b/.test(text)) return "g502";
   }
 
   if (product.brand === "Kingston") {
@@ -73,9 +81,11 @@ function hasFamilyConflict(a: NormalizedProduct, b: NormalizedProduct) {
 }
 
 function hasAttributeConflict(a: NormalizedProduct, b: NormalizedProduct) {
-  const aCapacity = normalizeCapacity(a.attributes.capacity);
-  const bCapacity = normalizeCapacity(b.attributes.capacity);
-  if (aCapacity !== null && bCapacity !== null && aCapacity !== bCapacity) return "capacity conflict";
+  const aCapacities = capacityValues(a);
+  const bCapacities = capacityValues(b);
+  if (aCapacities.length && bCapacities.length && !aCapacities.some((value) => bCapacities.includes(value))) {
+    return "capacity conflict";
+  }
 
   if (a.attributes.memoryType && b.attributes.memoryType && a.attributes.memoryType !== b.attributes.memoryType) {
     return "memory generation conflict";
@@ -143,11 +153,11 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
     reasons.push("product family match");
   }
 
-  if (input.attributes.capacity && normalizedCandidate.attributes.capacity) {
-    if (normalizeCapacity(input.attributes.capacity) === normalizeCapacity(normalizedCandidate.attributes.capacity)) {
-      score += 10;
-      reasons.push("capacity match");
-    }
+  const inputCapacities = capacityValues(input);
+  const candidateCapacities = capacityValues(normalizedCandidate);
+  if (inputCapacities.length && candidateCapacities.length && inputCapacities.some((value) => candidateCapacities.includes(value))) {
+    score += 10;
+    reasons.push("capacity match");
   }
 
   if (input.attributes.memoryType && input.attributes.memoryType === normalizedCandidate.attributes.memoryType) {
@@ -169,8 +179,6 @@ export function scoreProductMatch(input: NormalizedProduct, candidate: Candidate
     reasons.push("name similarity");
   }
 
-  // 53 is intentionally the match floor for a known family with strong
-  // supporting evidence. Hard conflicts are rejected above before scoring.
   const status = score >= 53 ? "match" : score >= 45 ? "ambiguous" : "new";
   return { product: status === "new" ? null : candidate, score, status, reasons };
 }
@@ -180,12 +188,15 @@ export function findBestProductMatch(input: NormalizedProduct, candidates: Candi
     .map((candidate) => scoreProductMatch(input, candidate))
     .sort((a, b) => b.score - a.score);
 
-  const best = scored[0];
-  if (!best || best.status === "new") {
-    return { product: null, score: best?.score ?? 0, status: "new", reasons: best?.reasons ?? ["no candidates"] };
+  const viable = scored.filter((decision) => decision.product !== null && decision.status !== "new");
+  const best = viable[0];
+
+  if (!best) {
+    const firstReason = scored.find((decision) => decision.reasons.length)?.reasons ?? ["no candidates"];
+    return { product: null, score: 0, status: "new", reasons: firstReason };
   }
 
-  const second = scored[1];
+  const second = viable[1];
   const bestFamily = best.product ? extractFamily(normalizeProduct(best.product)) : null;
   const secondFamily = second?.product ? extractFamily(normalizeProduct(second.product)) : null;
   const sameFamily = Boolean(bestFamily && secondFamily && bestFamily === secondFamily);
