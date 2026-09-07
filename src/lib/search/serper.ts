@@ -37,7 +37,18 @@ function parseMoney(value: string | number | undefined) { if (typeof value === "
 function parseCount(value: string | number | undefined) { if (typeof value === "number" && Number.isFinite(value)) return Math.round(value); if (!value) return null; const normalized = String(value).toLowerCase().replace(/,/g, "").trim(); const match = normalized.match(/([0-9]+(?:\.[0-9]+)?)\s*([km]?)/); if (!match) return null; const base = Number(match[1]); const multiplier = match[2] === "k" ? 1_000 : match[2] === "m" ? 1_000_000 : 1; return Number.isFinite(base) ? Math.round(base * multiplier) : null; }
 function parseSoldCount(text: string) { const match = text.match(/(?:terjual|sold)\s*([0-9]+(?:[.,][0-9]+)?)\s*([rbkm]?)/i); if (!match) return null; return parseCount(`${match[1]}${match[2]}`); }
 function sellerScore(rating: number | null, reviews: number | null, sold: number | null) { if (rating == null && reviews == null && sold == null) return null; const ratingScore = rating == null ? 0 : Math.min(5, Math.max(0, rating)) / 5 * 55; const reviewScore = reviews == null ? 0 : Math.min(1, Math.log10(Math.max(1, reviews)) / 5) * 25; const soldScore = sold == null ? 0 : Math.min(1, Math.log10(Math.max(1, sold)) / 5) * 20; return Math.round(ratingScore + reviewScore + soldScore); }
-function isProductUrl(listing: DiscoveredListing) { const parsed = new URL(listing.url); const path = parsed.pathname.toLowerCase().replace(/\/+$/, ""); if (listing.marketplace === "shopee") return /-i\.\d+\.\d+$/.test(path); if (listing.marketplace === "tokopedia") { if (path.startsWith("/find") || path.startsWith("/search") || path.includes("/review")) return false; return path.split("/").filter(Boolean).length >= 2; } if (listing.marketplace === "lazada") return path.startsWith("/products/") && /-i\d+\.html$/.test(path); return false; }
+
+function isProductUrl(listing: DiscoveredListing) {
+  const parsed = new URL(listing.url);
+  const path = parsed.pathname.toLowerCase().replace(/\/+$/, "");
+  const segments = path.split("/").filter(Boolean);
+  if (!segments.length) return false;
+  if (/\/(search|find|category|categories|mall|reviews?|help|login)(\/|$)/i.test(path)) return false;
+  if (listing.marketplace === "shopee") return /-i\.\d+\.\d+$/.test(path) || (listing.price != null && segments.length >= 1);
+  if (listing.marketplace === "tokopedia") return !path.startsWith("/find") && !path.startsWith("/search") && !path.includes("/review") && (segments.length >= 2 || listing.price != null);
+  if (listing.marketplace === "lazada") return (/^\/products\//.test(path) && /-i\d+\.html$/.test(path)) || (listing.price != null && segments.length >= 2);
+  return false;
+}
 
 export function cleanAndDeduplicateListings(listings: DiscoveredListing[]) { const seen = new Set<string>(); return listings.flatMap((listing) => { if (listing.marketplace === "other") return []; let url: string; try { url = normalizeUrl(listing.url); } catch { return []; } const normalizedListing = { ...listing, url }; if (!isProductUrl(normalizedListing)) return []; const key = `${listing.marketplace}:${url}`; if (seen.has(key)) return []; seen.add(key); return [normalizedListing]; }); }
 export function matchDiscoveredListings(listings: DiscoveredListing[], candidates: CandidateProduct[]) { return cleanAndDeduplicateListings(listings).map<MatchedDiscoveredListing>((listing) => { const normalized = normalizeProduct({ name: listing.title }); const match = findBestProductMatch(normalized, candidates); return { ...listing, normalized, match }; }); }
