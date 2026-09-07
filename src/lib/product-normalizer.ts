@@ -70,10 +70,21 @@ function detectModel(text: string, explicitModel?: string | null) {
 function extractAttributes(text: string) {
   const normalized = clean(text);
   const attributes: Record<string, string> = {};
-  const capacity = normalized.match(/\b(\d+(?:\.\d+)?)\s*(tb|gb)\b/i);
+
+  const capacities = Array.from(normalized.matchAll(/\b(\d+(?:\.\d+)?)\s*(tb|gb)\b/gi)).map(
+    (match) => `${match[1]}${match[2].toUpperCase()}`,
+  );
+  const uniqueCapacities = [...new Set(capacities)];
+
   const ddr = normalized.match(/\bddr\s*(4|5)\b/i);
   const speed = normalized.match(/\b(\d{3,5})\s*mhz\b/i);
-  if (capacity) attributes.capacity = `${capacity[1]}${capacity[2].toUpperCase()}`;
+
+  // Keep capacity for backwards compatibility, but expose all capacities when
+  // a marketplace listing represents multiple selectable variants.
+  if (uniqueCapacities.length) {
+    attributes.capacity = uniqueCapacities[0];
+    if (uniqueCapacities.length > 1) attributes.capacities = uniqueCapacities.join(",");
+  }
   if (ddr) attributes.memoryType = `DDR${ddr[1]}`;
   if (speed) attributes.speed = `${speed[1]}MHz`;
   return attributes;
