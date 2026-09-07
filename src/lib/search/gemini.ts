@@ -55,10 +55,11 @@ function parseCount(value: GeminiListing["reviewCount"] | GeminiListing["soldCou
 
 function marketplaceFromUrl(url: string): DiscoveredListing["marketplace"] {
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
     if (host === "shopee.co.id" || host.endsWith(".shopee.co.id")) return "shopee";
     if (host === "tokopedia.com" || host.endsWith(".tokopedia.com")) return "tokopedia";
     if (host === "lazada.co.id" || host.endsWith(".lazada.co.id")) return "lazada";
+    return host;
   } catch {}
   return "other";
 }
@@ -98,7 +99,7 @@ function marketplaceUrlFromText(text: string) {
 }
 
 function bestGroundingUrl(item: GeminiListing, chunks: GroundingChunk[]) {
-  const explicit = item.url && marketplaceFromUrl(item.url) !== "other" ? item.url : undefined;
+  const explicit = item.url || undefined;
   if (explicit) return explicit;
 
   const indexed = item.sourceIndex != null ? chunks[item.sourceIndex]?.web : undefined;
@@ -120,58 +121,34 @@ function bestGroundingUrl(item: GeminiListing, chunks: GroundingChunk[]) {
 }
 
 async function requestGemini(apiKey: string, keyword: string, limit: number) {
-  const prompt = `You are a product research agent. You must use Google Search for this request; do not answer from memory.
+  const prompt = `You are a product research agent. You MUST use Google Search for this request; do not answer from memory and do not restrict the search to specific domains.
 
-Find current real product listings in Indonesia for the exact product: "${keyword}".
-Search separately for these marketplaces:
-1. site:shopee.co.id "${keyword}"
-2. site:tokopedia.com "${keyword}"
-3. site:lazada.co.id "${keyword}"
+Search the entire public web for current real purchasable product listings in Indonesia for the exact product: "${keyword}".
 
-Only report listings that you can verify from the Google Search results. Prefer actual product/detail pages, not category pages, search pages, articles, or reviews. Return up to ${limit} listings per marketplace when available.
+Use Google Search broadly. Look for marketplaces, retailers, specialty stores, manufacturer stores, distributors, and other ecommerce sites. Do NOT limit the search to Shopee, Tokopedia, Lazada, or any predefined website. Prioritize actual product/detail pages over category pages, search pages, articles, reviews, or generic homepages.
 
-For every listing, extract the exact listing title, current price in IDR if shown, seller/store if shown, rating/review/sold counts if shown, and the actual marketplace product URL. Do not invent or estimate missing values; use null when a field is unavailable.
+Return up to ${limit} of the strongest verified listings you can find across the web. For every listing, extract the exact listing title, current price in IDR if shown, seller/store if shown, rating/review/sold counts if shown, and the actual product-page URL. Do not invent or estimate missing values; use null when unavailable.
 
-Return ONLY a JSON array with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. sourceIndex is the zero-based index of the supporting grounded web source. Do not return markdown or explanatory text.`;
+Only include listings supported by the Google Search results. Return ONLY a JSON array with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. sourceIndex is the zero-based index of the supporting grounded web source. Do not return markdown or explanatory text.`;
 
-  console.log("[gemini-debug] request", {
-    endpoint: GEMINI_ENDPOINT,
-    keyword,
-    limit,
-    hasApiKey: Boolean(apiKey),
-  });
-
+  console.log("[gemini-debug] request", { endpoint: GEMINI_ENDPOINT, keyword, limit, hasApiKey: Boolean(apiKey) });
   const startedAt = Date.now();
   try {
     const response = await fetch(GEMINI_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0 },
-      }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 0 } }),
       cache: "no-store",
     });
-
-    console.log("[gemini-debug] http", {
-      status: response.status,
-      ok: response.ok,
-      elapsedMs: Date.now() - startedAt,
-    });
-
+    console.log("[gemini-debug] http", { status: response.status, ok: response.ok, elapsedMs: Date.now() - startedAt });
     const data = (await response.json().catch(() => ({}))) as GeminiResponse;
     if (!response.ok) {
       const detail = data.error?.message ? ` ${data.error.message}` : "";
       throw new Error(`Gemini API returned HTTP ${response.status}.${detail}`);
     }
-
     return data;
   } catch (error) {
-    console.error("[gemini-debug] request failed", {
-      elapsedMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    console.error("[gemini-debug] request failed", { elapsedMs: Date.now() - startedAt, error: error instanceof Error ? error.message : String(error) });
     throw error;
   }
 }
@@ -179,16 +156,15 @@ Return ONLY a JSON array with objects containing: title, url, price, seller, rat
 export async function discoverListingsWithGemini(keyword: string, options?: { limit?: number }) {
   const trimmed = keyword.trim();
   if (!trimmed) throw new Error("Search keyword is required.");
-
   const apiKey = requiredEnv("GEMINI_API_KEY");
-  const limit = Math.min(10, Math.max(1, options?.limit ?? 5));
+  const limit = Math.min(20, Math.max(1, options?.limit ?? 10));
   const data = await requestGemini(apiKey, trimmed, limit);
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
   const metadata = candidate?.groundingMetadata;
   const chunks = metadata?.groundingChunks ?? [];
-
   const parsedListings = extractJson(text);
+
   console.log("[gemini-debug] response", {
     candidateCount: data.candidates?.length ?? 0,
     finishReason: candidate?.finishReason ?? null,
@@ -201,50 +177,25 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
     groundingSupportCount: metadata?.groundingSupports?.length ?? 0,
     webSearchQueries: metadata?.webSearchQueries ?? [],
     hasSearchEntryPoint: Boolean(metadata?.searchEntryPoint),
-    groundingChunks: chunks.map((chunk, index) => ({
-      index,
-      title: chunk.web?.title ?? null,
-      uri: chunk.web?.uri ?? null,
-      marketplace: chunk.web?.uri ? marketplaceFromUrl(chunk.web.uri) : "other",
-    })),
+    groundingChunks: chunks.map((chunk, index) => ({ index, title: chunk.web?.title ?? null, uri: chunk.web?.uri ?? null, marketplace: chunk.web?.uri ? marketplaceFromUrl(chunk.web.uri) : "other" })),
   });
 
   const textUrl = marketplaceUrlFromText(text);
-
   const seen = new Set<string>();
   return parsedListings.flatMap((item): DiscoveredListing[] => {
     const rawUrl = bestGroundingUrl(item, chunks) ?? textUrl;
     if (!rawUrl || !item.title) return [];
-
     let url: string;
-    try {
-      url = normalizeUrl(rawUrl);
-    } catch {
-      return [];
-    }
-
+    try { url = normalizeUrl(rawUrl); } catch { return []; }
     const marketplace = marketplaceFromUrl(url);
     if (marketplace === "other") return [];
-
     const key = `${marketplace}:${url}`;
     if (seen.has(key)) return [];
     seen.add(key);
-
     const rating = item.rating == null ? null : Number(item.rating);
     const reviewCount = parseCount(item.reviewCount);
     const soldCount = parseCount(item.soldCount);
     const safeRating = Number.isFinite(rating ?? NaN) ? rating : null;
-
-    return [{
-      marketplace,
-      title: item.title,
-      url,
-      price: parseMoney(item.price),
-      seller: item.seller ?? null,
-      rating: safeRating,
-      reviewCount,
-      soldCount,
-      sellerTrustScore: sellerScore(safeRating, reviewCount, soldCount),
-    }];
+    return [{ marketplace, title: item.title, url, price: parseMoney(item.price), seller: item.seller ?? null, rating: safeRating, reviewCount, soldCount, sellerTrustScore: sellerScore(safeRating, reviewCount, soldCount) }];
   }).filter((listing) => listing.price !== null || listing.sellerTrustScore !== null);
 }
