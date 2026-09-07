@@ -23,17 +23,26 @@ function parseMoney(value: string | number | null | undefined) {
 function parseCount(value: string | number | null | undefined) {
   if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
   if (!value) return null;
-  const normalized = String(value).toLowerCase().replace(/,/g, "").trim();
-  const match = normalized.match(/([0-9]+(?:\.[0-9]+)?)\s*([km]?)/);
+  const normalized = String(value).toLowerCase().replace(/\s+/g, "").replace(/\./g, "");
+  const match = normalized.match(/([0-9]+(?:,[0-9]+)?)\s*([kmrb]?)/);
   if (!match) return null;
-  const base = Number(match[1]);
-  const multiplier = match[2] === "k" ? 1_000 : match[2] === "m" ? 1_000_000 : 1;
+  const base = Number(match[1].replace(",", "."));
+  const suffix = match[2];
+  const multiplier = suffix === "k" || suffix === "rb" ? 1_000 : suffix === "m" ? 1_000_000 : 1;
   return Number.isFinite(base) ? Math.round(base * multiplier) : null;
 }
 
 function parseSoldCount(text: string) {
-  const match = text.match(/(?:terjual|sold)\s*([0-9]+(?:[.,][0-9]+)?)\s*([rbkm]?)/i);
-  return match ? parseCount(`${match[1]}${match[2]}`) : null;
+  const normalized = text.replace(/\u00a0/g, " ");
+  const patterns = [
+    /(?:terjual|sold)\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)\s*([kmrb]?)/i,
+    /([0-9]+(?:[.,][0-9]+)?)\s*([kmrb]?)\s*(?:terjual|sold)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match) return parseCount(`${match[1]}${match[2]}`);
+  }
+  return null;
 }
 
 function sellerFromUrl(listing: DiscoveredListing) {
@@ -51,7 +60,8 @@ export function extractListingData(listing: DiscoveredListing): ExtractedListing
   const rating = listing.rating ?? null;
   const reviewCount = listing.reviewCount ?? null;
   const soldCount = listing.soldCount ?? parseSoldCount(text);
-  const inStock = !/habis|sold\s*out|out\s*of\s*stock|stok\s*habis/i.test(text);
+  const outOfStock = /habis|sold\s*out|out\s*of\s*stock|stok\s*habis|tidak\s*tersedia|tidak\s*available/i.test(text);
+  const inStock = !outOfStock;
 
   return {
     price,
@@ -66,7 +76,7 @@ export function extractListingData(listing: DiscoveredListing): ExtractedListing
       rating: listing.rating != null ? "structured" : "missing",
       reviewCount: listing.reviewCount != null ? "structured" : "missing",
       soldCount: listing.soldCount != null ? "structured" : soldCount != null ? "snippet" : "missing",
-      inStock: /habis|sold\s*out|out\s*of\s*stock|stok\s*habis/i.test(text) ? "snippet" : "inferred",
+      inStock: outOfStock ? "snippet" : "inferred",
     },
   };
 }
