@@ -115,6 +115,7 @@ function bestGroundingUrl(item: GeminiListing, chunks: GroundingChunk[]) {
 
 async function requestGemini(apiKey: string, keyword: string, limit: number) {
   const prompt = `Search Google for real Indonesian marketplace listings for the exact product: "${keyword}". Look across Shopee Indonesia, Tokopedia, and Lazada Indonesia. Return up to ${limit} listings per marketplace when available. Do not invent listings, prices, sellers, ratings, or URLs. Only include listings supported by grounded search sources. Return ONLY a JSON array, no markdown, with objects containing: title, url, price, seller, rating, reviewCount, soldCount, sourceIndex. url must be the actual marketplace product URL when visible in the grounded source; otherwise null. price must be an integer IDR when visible, otherwise null. sourceIndex should identify the grounded source supporting the listing.`;
+  console.log("[gemini-debug] request", { endpoint: GEMINI_ENDPOINT, keyword, limit, hasApiKey: Boolean(apiKey) });
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
   try {
@@ -131,6 +132,7 @@ async function requestGemini(apiKey: string, keyword: string, limit: number) {
     });
 
     const data = (await response.json().catch(() => ({}))) as GeminiResponse;
+    console.log("[gemini-debug] http", { status: response.status, ok: response.ok, hasCandidates: Boolean(data.candidates?.length), error: data.error ?? null });
     if (!response.ok) {
       const detail = data.error?.message ? ` ${data.error.message}` : "";
       throw new Error(`Gemini API returned HTTP ${response.status}.${detail}`);
@@ -154,8 +156,8 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
   const chunks = candidate?.groundingMetadata?.groundingChunks ?? [];
-
   const parsedListings = extractJson(text);
+
   console.log("[gemini-debug] response", {
     candidateCount: data.candidates?.length ?? 0,
     textLength: text.length,
@@ -171,7 +173,6 @@ export async function discoverListingsWithGemini(keyword: string, options?: { li
   });
 
   const textUrl = marketplaceUrlFromText(text);
-
   const seen = new Set<string>();
   return parsedListings.flatMap((item): DiscoveredListing[] => {
     const rawUrl = bestGroundingUrl(item, chunks) ?? textUrl;
