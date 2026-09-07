@@ -30,7 +30,17 @@ type Product = {
   listings: Listing[];
 };
 
+type HistoryPoint = {
+  listingId: string;
+  marketplace: string;
+  marketplaceSlug: string;
+  price: number;
+  inStock: boolean;
+  observedAt: string;
+};
+
 const money = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
+const dateTime = new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" });
 
 function iconFor(category: string) {
   if (category === "Mouse") return "🖱️";
@@ -42,6 +52,7 @@ function iconFor(category: string) {
 export default function ProductPage() {
   const [id, setId] = useState("");
   const [product, setProduct] = useState<Product | null>(null);
+  const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -53,12 +64,20 @@ export default function ProductPage() {
     if (!id) return;
 
     setError("");
-    fetch(`/api/product?id=${encodeURIComponent(id)}`)
-      .then(async (response) => {
+    Promise.all([
+      fetch(`/api/product?id=${encodeURIComponent(id)}`).then(async (response) => {
         if (!response.ok) throw new Error("Product not found");
         return response.json();
+      }),
+      fetch(`/api/product/history?id=${encodeURIComponent(id)}`).then(async (response) => {
+        if (!response.ok) throw new Error("History unavailable");
+        return response.json();
+      }),
+    ])
+      .then(([productData, historyData]) => {
+        setProduct(productData);
+        setHistory(historyData.history ?? []);
       })
-      .then(setProduct)
       .catch(() => setError("Could not load this product."));
   }, [id]);
 
@@ -68,7 +87,7 @@ export default function ProductPage() {
 
   return (
     <main className="detail-page">
-      <header className="header"><nav className="nav"><Link className="logo" href="/">compare.</Link><span className="badge">V1.3 · Compare</span></nav></header>
+      <header className="header"><nav className="nav"><Link className="logo" href="/">compare.</Link><span className="badge">V1.5 · Price intelligence</span></nav></header>
       <section className="detail-content">
         <Link className="back" href="/">← Back to search</Link>
         <div className="detail-hero">
@@ -98,7 +117,27 @@ export default function ProductPage() {
             </div>
           ))}
         </div>
-        <p className="disclaimer">Prices are for the current MVP dataset. Marketplace links will become real affiliate links when integrations are added.</p>
+
+        <div className="section-title"><h2>Price history</h2><span className="demo">{history.length} observations</span></div>
+        {history.length === 0 ? (
+          <div className="empty">No price changes recorded yet. Import the catalog again after changing a listing price to create the first observation.</div>
+        ) : (
+          <div className="compare-table">
+            {[...history].reverse().map((point, index) => (
+              <div className="compare-row" key={`${point.listingId}-${point.observedAt}-${index}`}>
+                <div>
+                  <div className="market">{point.marketplace}</div>
+                  <div className="meta">{dateTime.format(new Date(point.observedAt))}</div>
+                </div>
+                <div className="compare-price">{money.format(point.price)}</div>
+                <div className="meta stock">{point.inStock ? "In stock" : "Out of stock"}</div>
+                <div className="meta">Observed</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="disclaimer">Price history is based on observations collected by imports. It does not yet represent continuous real-time tracking.</p>
       </section>
     </main>
   );
